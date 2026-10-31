@@ -45,7 +45,7 @@ npm run dev
 5. Click **Test API Key** to verify it works
 6. Go to **Vault** tab and add your resume, portfolio, notes, and tone samples. The add/edit form can paste text or import a PDF, DOCX, TXT, or Markdown file locally.
 7. Open an application form page, click the extension icon to open the side panel, then click **Enable on this site** and grant permission. This uses a runtime per-site host permission; the extension does not run on sites you have not enabled.
-8. Click **Scan Page** in the side panel (or the floating **SR** toolbar on the page), then click a highlighted field to draft an answer.
+8. Click **Scan Page** in the side panel (or the floating **PS** toolbar on the page), then click a highlighted field to draft an answer.
 
 ## Review, errors, and accessibility
 
@@ -117,7 +117,7 @@ test-pages/       # Sample forms for manual testing
 ## Nice-to-haves (Phase 5)
 
 - **Vault profiles**: Options → Vault has a profile bar. Create profiles such as "Product roles" and "Ops roles", switch the active one, and add/import items into it. Default is always available and cannot be deleted.
-- **Profile selection on the page**: the floating **SR** menu and the side panel header both have a vault-profile selector. A selection is stored per site, so one site can use Operations while another uses Customer Success. Choose **Auto** to fall back to a matching site profile's vault mapping, then the globally active profile.
+- **Profile selection on the page**: the floating **PS** menu and the side panel header both have a vault-profile selector. A selection is stored per site, so one site can use Operations while another uses Customer Success. Choose **Auto** to fall back to a matching site profile's vault mapping, then the globally active profile.
 - **Automatic mapping**: Options → Profiles can bind a site profile to a vault profile. When the site profile matches the page, that vault profile is used automatically until you explicitly override it from the toolbar or side panel.
 - **Cover letter & video script**: from the page toolbar menu or the side panel, generate a tailored cover letter or a short self-introduction video script from the page's job description plus the active vault. The result streams into a modal with Copy, Download `.txt`, and Save to Vault. Company, job title, and job description are taken from the page's JSON-LD `JobPosting` data when available, then from job-specific DOM selectors, so job boards do not substitute the board name for the hiring company.
 - **History management**: Options → History lists saved answers with search, company and date-range filters, copy, full-answer expansion, inline-confirmed delete, pagination, and CSV export of `company,question,answer,date`.
@@ -135,7 +135,7 @@ test-pages/       # Sample forms for manual testing
 - **Automated tests**: `npm test` runs pure-module tests with Node's built-in test runner.
 - **Shared option constants and URL-backed tabs**: tone/language lists live in `src/lib/options.ts`; options tabs reflect `#vault`, `#profiles`, `#history`, and `#settings`.
 - **Dark mode**: toggle from the options or side-panel header. The choice is stored in `sr-theme` and the injected page UI (toolbar, answer card, document modal, triage dialog) listens for the same setting, so all surfaces switch together. `system` mode follows the OS preference.
-- **Floating toolbar**: drag the SR button to move it anywhere in the viewport. Position is persisted and clamped on drag/resize. The container is anchored by the button corner, so the menu always expands into free space: above the button near the bottom, below it near the top, and left/right according to the nearest viewport edge.
+- **Floating toolbar**: drag the PS button to move it anywhere in the viewport. Position is persisted and clamped on drag/resize. The container is anchored by the button corner, so the menu always expands into free space: above the button near the bottom, below it near the top, and left/right according to the nearest viewport edge.
 - **Interface language**: Settings → **Interface language** selects the extension UI locale separately from the answer **Language**. The options tabs, side-panel chrome, and Settings labels use `src/lib/i18n.ts` (English + Spanish); other UI locales fall back to English while generated answers still use the selected answer language.
 - **Model autocomplete**: the Model field is a combobox that loads the selected provider's model catalog (OpenRouter's public list, or the provider's `/v1/models` endpoint with your key) and filters by substring as you type, matching both model IDs and display names. Results are cached for 10 minutes; if the background worker cannot reach the catalog, the options page retries directly and falls back to built-in suggestions. The field displays the number of models loaded so a failed fetch is visible.
 

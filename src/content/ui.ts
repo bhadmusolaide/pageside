@@ -72,7 +72,7 @@ const TOOLBAR_HTML = `
     <div class="sep"></div>
     <button id="__sr-toggle-enable" style="color:#666">Disable on this site</button>
   </div>
-  <button id="__sr-toggle">SR</button>
+  <button id="__sr-toggle" aria-label="Pageside" title="Pageside">PS</button>
 </div>
 `;
 
