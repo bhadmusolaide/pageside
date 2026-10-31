@@ -7,7 +7,7 @@ Manifest V3 Chrome extension that reads the current page, detects form questions
 - TypeScript, React, Vite with @crxjs/vite-plugin, Tailwind CSS
 - IndexedDB via `idb` for vault and answer history
 - chrome.storage.local for settings and API key
-- LLM API via **OpenRouter** (default) or **Anthropic**, called from the service worker only, streamed over ports
+- LLM API via **OpenRouter** (default), **Anthropic**, **OpenAI**, **Grok (xAI)**, or **Groq**, called from the service worker only, streamed over ports
 
 ## Setup
 
@@ -35,8 +35,13 @@ npm run dev
 
 1. Right-click the extension icon → **Options** (or navigate to the extension's options page)
 2. Go to **Settings** tab
-3. Choose a **Provider** — **OpenRouter** (default) or **Anthropic** — and enter the matching API key (get one at https://openrouter.ai/keys or https://console.anthropic.com)
-4. Set the **Model** (for OpenRouter, use any model id from https://openrouter.ai/models, e.g. `anthropic/claude-3.5-sonnet`; for Anthropic use `claude-sonnet-5-5` etc.)
+3. Choose a **Provider** — OpenRouter (default), Anthropic, OpenAI, Grok (xAI), or Groq — and enter the matching API key:
+   - OpenRouter: https://openrouter.ai/keys
+   - Anthropic: https://console.anthropic.com
+   - OpenAI: https://platform.openai.com/api-keys
+   - Grok (xAI): https://console.x.ai
+   - Groq: https://console.groq.com/keys
+4. Set the **Model**. The field loads the provider's catalog and filters as you type; you can also paste any model id manually.
 5. Click **Test API Key** to verify it works
 6. Go to **Vault** tab and add your resume, portfolio, notes, and tone samples. The add/edit form can paste text or import a PDF, DOCX, TXT, or Markdown file locally.
 7. Open an application form page, click the extension icon to open the side panel, then click **Enable on this site** and grant permission. This uses a runtime per-site host permission; the extension does not run on sites you have not enabled.
@@ -71,16 +76,17 @@ npm run build
 
 ```
 src/
-  background/     # Service worker: LLM calls via Anthropic API, commands
+  background/     # Service worker: LLM calls to the configured provider, commands
   content/        # Frame scanner, field detector, shadow-DOM UI, panel state
   sidepanel/      # Side panel (per-question drafts, statuses, bulk insert)
   options/        # Vault manager, site profiles, and settings page
   lib/            # Shared modules
     vault.ts          # IndexedDB vault CRUD
     vaultProfile.ts   # Multiple vault profiles (active profile in chrome.storage)
+    pdfText.ts      # pdfjs-dist PDF text extraction with a bundled worker
     history.ts        # IndexedDB accepted-answer history + similarity scoring
     retrieval.ts      # Local keyword/TF-IDF/feature-hashed embedding retrieval
-    documentImport.ts # Local PDF/DOCX/TXT/Markdown text extraction
+    documentImport.ts # Local DOCX/TXT/Markdown extraction; PDF delegated to pdfText.ts
     profile.ts        # Per-site profiles (match by URL/company/job title)
     fieldDetector.ts  # Pure field detection (unit-testable)
     filler.ts         # Pure field filling (unit-testable)
@@ -113,7 +119,7 @@ test-pages/       # Sample forms for manual testing
 - **Vault profiles**: Options → Vault has a profile bar. Create profiles such as "Product roles" and "Ops roles", switch the active one, and add/import items into it. Default is always available and cannot be deleted.
 - **Profile selection on the page**: the floating **SR** menu and the side panel header both have a vault-profile selector. A selection is stored per site, so one site can use Operations while another uses Customer Success. Choose **Auto** to fall back to a matching site profile's vault mapping, then the globally active profile.
 - **Automatic mapping**: Options → Profiles can bind a site profile to a vault profile. When the site profile matches the page, that vault profile is used automatically until you explicitly override it from the toolbar or side panel.
-- **Cover letter & video script**: from the page toolbar menu or the side panel, generate a tailored cover letter or a short self-introduction video script from the page's job description plus the active vault. The result streams into a modal with Copy, Download `.txt`, and Save to Vault.
+- **Cover letter & video script**: from the page toolbar menu or the side panel, generate a tailored cover letter or a short self-introduction video script from the page's job description plus the active vault. The result streams into a modal with Copy, Download `.txt`, and Save to Vault. Company, job title, and job description are taken from the page's JSON-LD `JobPosting` data when available, then from job-specific DOM selectors, so job boards do not substitute the board name for the hiring company.
 - **History management**: Options → History lists saved answers with search, company and date-range filters, copy, full-answer expansion, inline-confirmed delete, pagination, and CSV export of `company,question,answer,date`.
 - **Usage cost**: each answer and the session header show provider/reported tokens plus an approximate USD estimate from a local model-pricing table.
 - **Local retrieval modes**: Settings → Vault retrieval selects Keyword (default), TF-IDF, or Experimental local embeddings. All run locally with no model downloads or network calls; embeddings use a dependency-free 512-dimension feature-hashed vector.
@@ -125,13 +131,13 @@ test-pages/       # Sample forms for manual testing
 - **Undo**: Insert actions can be undone from the answer card or the side panel. `filler.ts` keeps the previous value per field.
 - **Iframe aggregation**: the side panel scans and lists fields from every frame it is injected into, showing the frame id when it is not the top frame. Cross-origin iframes still need their own host permission.
 - **Per-answer source attribution**: history records the sources used for that field's draft, including bulk inserts.
-- **Local file import**: vault items can be populated from PDF, DOCX, TXT, or Markdown. DOCX uses native ZIP/deflate parsing; PDF uses a best-effort text extractor for non-scanned PDFs. No file leaves the browser.
+- **Local file import**: vault items can be populated from PDF, DOCX, TXT, or Markdown. DOCX uses native ZIP/deflate parsing; PDF uses `pdfjs-dist` locally (bundled worker), so compressed streams, object streams, and font-encoded text are handled. Scanned image-only PDFs still need OCR and show a clear message. No file leaves the browser.
 - **Automated tests**: `npm test` runs pure-module tests with Node's built-in test runner.
 - **Shared option constants and URL-backed tabs**: tone/language lists live in `src/lib/options.ts`; options tabs reflect `#vault`, `#profiles`, `#history`, and `#settings`.
 - **Dark mode**: toggle from the options or side-panel header. The choice is stored in `sr-theme` and the injected page UI (toolbar, answer card, document modal, triage dialog) listens for the same setting, so all surfaces switch together. `system` mode follows the OS preference.
 - **Floating toolbar**: drag the SR button to move it anywhere in the viewport. Position is persisted and clamped on drag/resize. The container is anchored by the button corner, so the menu always expands into free space: above the button near the bottom, below it near the top, and left/right according to the nearest viewport edge.
 - **Interface language**: Settings → **Interface language** selects the extension UI locale separately from the answer **Language**. The options tabs, side-panel chrome, and Settings labels use `src/lib/i18n.ts` (English + Spanish); other UI locales fall back to English while generated answers still use the selected answer language.
-- **Model autocomplete**: the Model field is a combobox that loads the selected provider's model catalog (OpenRouter's public list, or Anthropic's `/v1/models` with your key) and filters by substring as you type, matching both model IDs and display names. Results are cached for 10 minutes; if the background worker cannot reach the catalog, the options page retries directly and falls back to built-in suggestions. The field displays the number of models loaded so a failed fetch is visible.
+- **Model autocomplete**: the Model field is a combobox that loads the selected provider's model catalog (OpenRouter's public list, or the provider's `/v1/models` endpoint with your key) and filters by substring as you type, matching both model IDs and display names. Results are cached for 10 minutes; if the background worker cannot reach the catalog, the options page retries directly and falls back to built-in suggestions. The field displays the number of models loaded so a failed fetch is visible.
 
 ## Testing on Real Forms
 
@@ -157,7 +163,7 @@ python3 -m http.server 8080
 - `sidePanel` — side panel UI
 - `clipboardWrite` — copy answers
 - `optional_host_permissions: <all_urls>` — requested per site when you click **Enable on this site**
-- `https://api.anthropic.com/*`, `https://openrouter.ai/*` — LLM API calls
+- `https://api.anthropic.com/*`, `https://openrouter.ai/*`, `https://api.openai.com/*`, `https://api.x.ai/*`, `https://api.groq.com/*` — LLM API calls
 
 ## License
 

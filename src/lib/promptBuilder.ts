@@ -347,6 +347,9 @@ export function buildVideoScriptPrompt(
   parts.push('Format it as natural spoken prose the applicant can read to camera. No stage directions.');
   if (context.companyName) parts.push(`Reference ${context.companyName} naturally.`);
   if (context.jobTitle) parts.push(`Tailor it to the ${context.jobTitle} role.`);
+  if (context.jobDescription && context.jobDescription.length > 50) {
+    parts.push(`Role context (use to tailor, do not copy):\n${context.jobDescription.substring(0, 2500)}`);
+  }
   parts.push('');
   if (vaultContext) {
     parts.push('Relevant background information:');

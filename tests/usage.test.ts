@@ -53,6 +53,10 @@ test('estimated cost uses known model pricing and stays blank for unknown models
   const mini = estimateCost({ inputTokens: 1_000_000, outputTokens: 0 }, 'openai/gpt-4o-mini');
   assert.equal(mini, 0.15);
 
+  assert.equal(estimateCost({ inputTokens: 1_000_000, outputTokens: 1_000_000 }, 'gpt-4.1-mini'), 2);
+  assert.equal(estimateCost({ inputTokens: 1_000_000, outputTokens: 1_000_000 }, 'grok-4-fast-reasoning'), 0.7);
+  assert.equal(estimateCost({ inputTokens: 1_000_000, outputTokens: 0 }, 'llama-3.1-8b-instant'), 0.05);
+
   assert.equal(estimateCost({ inputTokens: 100, outputTokens: 100 }, 'unknown/model'), null);
   assert.equal(formatCost(0.00234), '$0.0023');
   assert.equal(formatCost(0.00001), '<$0.0001');

@@ -14,7 +14,19 @@ export default defineConfig({
         version: '1.0.0',
         description: 'Draft tailored answers for application form questions using your personal vault',
         permissions: ['storage', 'activeTab', 'tabs', 'clipboardWrite', 'sidePanel', 'scripting', 'webNavigation', 'unlimitedStorage'],
-        host_permissions: ['https://api.anthropic.com/*', 'https://openrouter.ai/*'],
+        host_permissions: [
+          'https://api.anthropic.com/*',
+          'https://openrouter.ai/*',
+          'https://api.openai.com/*',
+          'https://api.x.ai/*',
+          'https://api.groq.com/*',
+        ],
+        icons: {
+          16: 'icons/icon16.png',
+          32: 'icons/icon32.png',
+          48: 'icons/icon48.png',
+          128: 'icons/icon128.png',
+        },
         optional_host_permissions: ['<all_urls>'],
         web_accessible_resources: [{
           resources: ['assets/*'],
@@ -58,6 +70,12 @@ export default defineConfig({
         }],
         action: {
           default_title: 'Applyra',
+          default_icon: {
+            16: 'icons/icon16.png',
+            32: 'icons/icon32.png',
+            48: 'icons/icon48.png',
+            128: 'icons/icon128.png',
+          },
         },
       },
     }),

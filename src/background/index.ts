@@ -26,7 +26,7 @@ import type {
   SiteToggledResponse,
 } from '../lib/messaging';
 import { extractNeedsInputFlags } from '../lib/promptBuilder';
-import { getProviderConfig } from '../lib/provider';
+import { getProviderConfig, isChatModel, PROVIDERS } from '../lib/provider';
 import { getAllItems, addItem } from '../lib/vault';
 import { getActiveVaultProfileId } from '../lib/vaultProfile';
 import { findSimilarAnswers, addHistoryAnswer, getAllHistoryAnswers, deleteHistoryAnswer } from '../lib/history';
@@ -35,7 +35,7 @@ import type { AnswerSource } from '../lib/messaging';
 
 const DEFAULT_SETTINGS = {
   apiKey: '',
-  model: 'anthropic/claude-3.5-sonnet',
+  model: 'anthropic/claude-sonnet-5.5',
   provider: 'openrouter',
 };
 
@@ -177,54 +177,39 @@ async function handleListModels(
   request: ListModelsRequest,
   sendResponse: (response: ModelListResponse) => void
 ): Promise<void> {
-  const provider = request.provider === 'anthropic' ? 'anthropic' : 'openrouter';
+  const provider = request.provider in PROVIDERS ? request.provider : 'openrouter';
+  const config = getProviderConfig(provider);
   const apiKey = (request.apiKey ?? '').trim();
-  const cacheKey = provider === 'openrouter' ? 'openrouter:public' : `anthropic:${apiKey ? 'auth' : 'anon'}`;
+  const cacheKey = `${provider}:${config.modelsRequireKey ? (apiKey ? 'auth' : 'anon') : 'public'}`;
   const cached = modelCache.get(cacheKey);
   if (cached && Date.now() - cached.at < MODEL_CACHE_MS) {
     sendResponse({ type: 'model_list', provider, models: cached.models });
     return;
   }
 
-  if (provider === 'anthropic' && !apiKey) {
+  if (config.modelsRequireKey && !apiKey) {
     sendResponse({
       type: 'model_list',
       provider,
       models: [],
-      error: 'Enter an API key to load Anthropic models.',
+      error: `Enter an API key to load ${config.label} models.`,
     });
     return;
   }
 
   try {
-    let models: ModelOption[] = [];
-    if (provider === 'openrouter') {
-      // The catalog endpoint is public; do not attach the user's key so a key
-      // meant for a different provider cannot break model discovery.
-      const response = await fetch('https://openrouter.ai/api/v1/models');
-      if (!response.ok) {
-        throw new Error(response.status === 401 || response.status === 403
-          ? 'OpenRouter rejected the API key.'
-          : `OpenRouter returned ${response.status}.`);
-      }
-      const body = await response.json() as { data?: Array<{ id?: string; name?: string }> };
-      models = normalizeModels(body.data ?? []);
-    } else {
-      const response = await fetch('https://api.anthropic.com/v1/models?limit=1000', {
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-      });
-      if (!response.ok) {
-        throw new Error(response.status === 401 || response.status === 403
-          ? 'Anthropic rejected the API key.'
-          : `Anthropic returned ${response.status}.`);
-      }
-      const body = await response.json() as { data?: Array<{ id?: string; display_name?: string }> };
-      models = normalizeModels(body.data ?? []);
+    const response = await fetch(config.modelsUrl, {
+      headers: config.buildModelsHeaders(apiKey),
+    });
+    if (!response.ok) {
+      throw new Error(response.status === 401 || response.status === 403
+        ? `${config.label} rejected the API key.`
+        : `${config.label} returned ${response.status}.`);
     }
-
+    const body = await response.json() as {
+      data?: Array<{ id?: string; name?: string; display_name?: string }>;
+    };
+    const models = normalizeModels(body.data ?? []).filter(model => isChatModel(provider, model.id));
     if (models.length > 0) modelCache.set(cacheKey, { at: Date.now(), models });
     sendResponse({ type: 'model_list', provider, models });
   } catch (err) {
@@ -552,7 +537,7 @@ async function streamAnswer(
       system: request.systemPrompt,
       messages: [{ role: 'user', content: request.prompt }],
     }) as Record<string, unknown>;
-    if (settings.provider === 'openrouter') {
+    if (settings.provider === 'openrouter' || settings.provider === 'openai' || settings.provider === 'groq') {
       requestBody.stream_options = { include_usage: true };
     }
 

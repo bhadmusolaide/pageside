@@ -14,7 +14,8 @@ export async function extractTextFromFile(file: File): Promise<string> {
   }
 
   if (name.endsWith('.pdf') || file.type === 'application/pdf') {
-    return extractPdf(await file.arrayBuffer());
+    const { extractPdfText } = await import('./pdfText');
+    return extractPdfText(await file.arrayBuffer());
   }
 
   throw new Error('Unsupported file type. Use PDF, DOCX, TXT, or Markdown.');
@@ -99,91 +100,4 @@ function findEocd(view: DataView): number {
 async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   const stream = new Blob([data as unknown as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-/* ------------------------- PDF ------------------------- */
-
-async function extractPdf(buffer: ArrayBuffer): Promise<string> {
-  const bytes = new Uint8Array(buffer);
-  const binary = latin1(bytes);
-  const pieces: string[] = [];
-
-  const streamRe = /stream\r?\n/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = streamRe.exec(binary)) !== null) {
-    const start = match.index + match[0].length;
-    const end = binary.indexOf('endstream', start);
-    if (end < 0) break;
-
-    const dictionaryStart = Math.max(0, binary.lastIndexOf('<<', match.index));
-    const dictionary = binary.slice(dictionaryStart, match.index);
-    let streamBytes: Uint8Array | null = null;
-
-    if (/\/FlateDecode/.test(dictionary)) {
-      try {
-        streamBytes = await inflateRaw(bytes.subarray(start, end));
-      } catch {
-        streamBytes = null;
-      }
-    } else if (!/\/Filter/.test(dictionary)) {
-      streamBytes = bytes.subarray(start, end);
-    }
-
-    if (streamBytes) {
-      pieces.push(...extractPdfText(latin1(streamBytes)));
-    }
-    streamRe.lastIndex = end + 'endstream'.length;
-  }
-
-  const text = pieces.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  if (!text) {
-    throw new Error('Could not extract text from this PDF. Scanned PDFs need OCR; paste the text manually instead.');
-  }
-  return text;
-}
-
-function extractPdfText(content: string): string[] {
-  const out: string[] = [];
-  const tjRe = /\((?:\\.|[^\\()])*\)\s*Tj/g;
-  const tjArrayRe = /\[((?:\((?:\\.|[^\\()])*\)|[^\]])*)\]\s*TJ/g;
-
-  let match: RegExpExecArray | null;
-  while ((match = tjRe.exec(content)) !== null) {
-    const value = decodePdfString(match[0].replace(/\)\s*Tj$/, '').slice(1));
-    if (value.trim()) out.push(value);
-  }
-
-  while ((match = tjArrayRe.exec(content)) !== null) {
-    const strings = match[1].match(/\((?:\\.|[^\\()])*\)/g) ?? [];
-    const line = strings.map(s => decodePdfString(s.slice(1, -1))).join('');
-    if (line.trim()) out.push(line);
-  }
-
-  return out;
-}
-
-function decodePdfString(raw: string): string {
-  return raw.replace(/\\([nrtbf()\\]|[0-7]{1,3})/g, (_all, code: string) => {
-    switch (code) {
-      case 'n': return '\n';
-      case 'r': return '\r';
-      case 't': return '\t';
-      case 'b': return '\b';
-      case 'f': return '\f';
-      case '(': return '(';
-      case ')': return ')';
-      case '\\': return '\\';
-      default: return String.fromCharCode(parseInt(code, 8));
-    }
-  });
-}
-
-function latin1(bytes: Uint8Array): string {
-  let out = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    out += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return out;
 }

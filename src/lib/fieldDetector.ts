@@ -368,70 +368,326 @@ function extractAttributes(el: Element): Record<string, string> {
   return attrs;
 }
 
-export function extractPageContext(doc: Document): PageContext {
-  const title = doc.title || '';
-  const url = doc.location?.href || '';
-  const metaDesc = doc.querySelector('meta[name="description"]')?.getAttribute('content') || '';
-  const visibleText = extractVisibleText(doc.body, 5000);
+export interface StructuredJobPosting {
+  title: string | null;
+  company: string | null;
+  description: string | null;
+}
 
-  const companyName = guessCompanyName(doc, title);
-  const jobTitle = guessJobTitle(doc, title);
-  const jobDescription = extractJobDescription(doc);
+const JOB_DESCRIPTION_KEYWORDS = [
+  'responsibilit', 'requirement', 'qualification', 'you will', "you'll",
+  'about the role', 'about us', 'what you', 'skills', 'experience',
+  'benefits', 'apply', 'hiring', 'team', 'role', 'position', 'salary',
+];
+
+const STRIP_SELECTORS = [
+  'script', 'style', 'noscript', 'svg', 'iframe', 'object',
+  'header', 'nav', 'footer', 'aside', 'form',
+  '[hidden]', '[aria-hidden="true"]', '[role="navigation"]',
+  '[role="banner"]', '[role="contentinfo"]',
+].join(',');
+
+export function extractPageContext(doc: Document): PageContext {
+  const title = cleanText(doc.title || '');
+  const url = doc.location?.href || '';
+  const structured = extractStructuredJobPosting(doc);
+
+  const companyName = structured?.company ?? guessCompanyName(doc, title);
+  const jobTitle = structured?.title ?? guessJobTitle(doc, title);
+  const jobDescription = structured?.description ?? extractJobDescription(doc);
+  const visibleText = extractVisibleText(doc, 10000);
 
   return {
     title,
     url,
-    visibleText: visibleText.substring(0, 10000),
+    visibleText,
     companyName,
     jobTitle,
     jobDescription,
   };
 }
 
-function extractVisibleText(body: HTMLElement | null, maxChars: number): string {
-  if (!body) return '';
-  const clone = body.cloneNode(true) as HTMLElement;
+function cleanText(text: string): string {
+  return text.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
-  const selectors = ['script', 'style', 'noscript', 'svg', 'iframe', 'object', '[hidden]', '[aria-hidden="true"]'];
-  selectors.forEach(sel => {
-    clone.querySelectorAll(sel).forEach(n => n.remove());
+function cleanOrNull(value: unknown): string | null {
+  const text = typeof value === 'string' ? cleanText(value) : '';
+  return text || null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/* ---------------------- Structured job data (JSON-LD) ---------------------- */
+
+export function parseStructuredJobPosting(scripts: string[]): StructuredJobPosting | null {
+  for (const script of scripts) {
+    const data = parseJsonLd(script);
+    const posting = findJobPosting(data);
+    if (!posting) continue;
+
+    const organization = posting.hiringOrganization as unknown;
+    let company: string | null = null;
+    if (typeof organization === 'string') {
+      company = organization;
+    } else if (organization && typeof organization === 'object') {
+      company = (organization as Record<string, unknown>).name as string | undefined ?? null;
+    }
+
+    const rawDescription = typeof posting.description === 'string' ? posting.description : null;
+    return {
+      title: cleanOrNull(posting.title),
+      company: cleanOrNull(company),
+      description: rawDescription ? htmlToText(rawDescription) : null,
+    };
+  }
+  return null;
+}
+
+function extractStructuredJobPosting(doc: Document): StructuredJobPosting | null {
+  const scripts = Array.from(doc.querySelectorAll('script[type="application/ld+json"]'))
+    .map(script => script.textContent ?? '');
+  return parseStructuredJobPosting(scripts);
+}
+
+function parseJsonLd(text: string): unknown | null {
+  const raw = text.trim().replace(/^\uFEFF/, '');
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Some sites emit raw newlines/control characters inside JSON strings.
+    try {
+      return JSON.parse(repairJsonControlChars(raw));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function repairJsonControlChars(text: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if (inString) {
+      if (escaped) {
+        out += char;
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        out += char;
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        out += char;
+        inString = false;
+        continue;
+      }
+      if (code < 0x20) {
+        if (char === '\n') out += '\\n';
+        else if (char === '\r') out += '\\r';
+        else if (char === '\t') out += '\\t';
+        else out += ' ';
+        continue;
+      }
+      out += char;
+    } else {
+      if (char === '"') {
+        inString = true;
+        out += char;
+        continue;
+      }
+      out += code < 0x20 ? ' ' : char;
+    }
+  }
+
+  return out;
+}
+
+function findJobPosting(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findJobPosting(entry);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!value || typeof value !== 'object') return null;
+
+  const record = value as Record<string, unknown>;
+  const type = record['@type'];
+  const types = Array.isArray(type) ? type : [type];
+  if (types.includes('JobPosting')) return record;
+
+  for (const child of Object.values(record)) {
+    const found = findJobPosting(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function htmlToText(html: string): string {
+  const withBreaks = html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|li|div|h[1-6]|tr)>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
+    .replace(/<[^>]+>/g, ' ');
+  return decodeHtmlEntities(withBreaks)
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function decodeHtmlEntities(text: string): string {
+  const named: Record<string, string> = {
+    nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+    ndash: '–', mdash: '—', hellip: '…', rsquo: '’', lsquo: '‘',
+    rdquo: '”', ldquo: '“',
+  };
+  return text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (all, code: string) => {
+    if (code.startsWith('#')) {
+      const hex = code[1]?.toLowerCase() === 'x';
+      const value = parseInt(code.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(value) ? String.fromCodePoint(value) : all;
+    }
+    return named[code.toLowerCase()] ?? all;
   });
+}
 
-  let text = clone.textContent || '';
-  text = text.replace(/\s+/g, ' ').trim();
-  return text.substring(0, maxChars);
+/* ------------------------- Page fallbacks ------------------------- */
+
+function extractVisibleText(doc: Document, maxChars: number): string {
+  const root = doc.querySelector('main, article, [role="main"]') ?? doc.body;
+  if (!root) return '';
+  return normalizeBlockText(root).substring(0, maxChars);
+}
+
+function normalizeBlockText(element: Element): string {
+  const clone = element.cloneNode(true) as Element;
+  clone.querySelectorAll(STRIP_SELECTORS).forEach(node => node.remove());
+  clone.querySelectorAll('br').forEach(node => node.replaceWith('\n'));
+  clone.querySelectorAll('p, li, div, h1, h2, h3, h4, h5, h6, tr, section, article')
+    .forEach(node => node.append('\n'));
+
+  return ((clone as HTMLElement).textContent || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function guessCompanyName(doc: Document, title: string): string | null {
-  const ogSite = doc.querySelector('meta[property="og:site_name"]')?.getAttribute('content');
-  if (ogSite) return ogSite;
+  const siteName = cleanOrNull(doc.querySelector('meta[property="og:site_name"]')?.getAttribute('content'));
 
-  const match = title.match(new RegExp('(?:at|@|—|-|–|¦|\\/\\/)\\s*([A-Z][A-Za-z0-9 .&]+?)(?:\\s*(?:—|-|–|\\||¦|\\/\\/| hiring| careers| jobs))?'));
-  if (match) return match[1].trim();
+  const domSelectors = [
+    '[itemprop="hiringOrganization"] [itemprop="name"]',
+    '[itemprop="hiringOrganization"]',
+    '[class*="company-name" i]',
+    '[class*="companyName" i]',
+    '[class*="employer" i]',
+    '[data-company]',
+    'main a[href*="/company/"]',
+    'article a[href*="/company/"]',
+  ];
 
-  return null;
+  for (const selector of domSelectors) {
+    const element = doc.querySelector(selector);
+    const raw = element?.getAttribute('data-company') ?? element?.textContent;
+    const candidate = cleanOrNull(raw);
+    if (!candidate || candidate.length > 80) continue;
+    if (/^(company|about|careers?|jobs?|apply|home)$/i.test(candidate)) continue;
+    return candidate;
+  }
+
+  const titlePatterns: RegExp[] = [
+    /\b(?:at|@)\s+([A-Z][A-Za-z0-9&.'-]*(?:\s+[A-Z][A-Za-z0-9&.'-]*){0,4})/,
+    /([A-Z][A-Za-z0-9&.'-]*(?:\s+[A-Z][A-Za-z0-9&.'-]*){0,4})\s+(?:is hiring|careers|jobs)\b/i,
+  ];
+  for (const pattern of titlePatterns) {
+    const candidate = cleanOrNull(title.match(pattern)?.[1]);
+    if (candidate && candidate.length <= 80) return candidate;
+  }
+
+  return siteName;
 }
 
 function guessJobTitle(doc: Document, title: string): string | null {
-  const patterns = [
-    /(?:hiring|recruiting|looking for|position|role|job):?\s*(.+?)(?:\s*(?:at|@|—|-|–|\||¦))?$/im,
-    /(.+?)\s*(?:position|role|opening)/i,
-    /(?:senior|staff|lead|principal|junior|associate).{0,40}/i,
-  ];
+  const siteName = cleanOrNull(doc.querySelector('meta[property="og:site_name"]')?.getAttribute('content'));
+  const headings = doc.querySelectorAll('h1, [itemprop="title"], [class*="job-title" i], [class*="jobTitle" i]');
 
-  for (const p of patterns) {
-    const m = title.match(p);
-    if (m) return m[1] || m[0];
+  for (const heading of Array.from(headings)) {
+    const candidate = cleanOrNull(heading.textContent);
+    if (!candidate || candidate.length > 140) continue;
+    if (siteName && candidate.toLowerCase() === siteName.toLowerCase()) continue;
+    if (/^(jobs?|careers?|home|apply|application)$/i.test(candidate)) continue;
+    return candidate.replace(/\s*\((?:remote|hybrid|on-?site)[^)]*\)\s*$/i, '').trim() || candidate;
   }
 
-  return null;
+  let cleaned = title;
+  if (siteName) {
+    cleaned = cleaned.replace(new RegExp(`\\s*[|—–·]\\s*${escapeRegExp(siteName)}\\s*$`, 'i'), '').trim();
+  }
+  cleaned = cleaned.replace(/\s*[|—–·]\s*(?:jobs?|careers?|hiring)\s*$/i, '').trim();
+  return cleaned.length > 0 && cleaned.length <= 140 ? cleaned : null;
 }
 
 function extractJobDescription(doc: Document): string | null {
-  const candidates = doc.querySelectorAll('[class*="description"]:not(meta), [class*="Description"]:not(meta), article, [role="main"], [class*="content"], [class*="body"]');
-  for (const el of candidates) {
-    const text = el.textContent?.trim() || '';
-    if (text.length > 200 && text.length < 10000) return text.substring(0, 8000);
+  const selectorGroups = [
+    '[itemprop="description"]',
+    '[class*="job-description" i]',
+    '[id*="job-description" i]',
+    '[class*="jobDescription" i]',
+    '[class*="job-details" i]',
+    '[class*="jobDetails" i]',
+    '[class*="job-content" i]',
+    '[class*="jobContent" i]',
+    'article',
+    'main',
+    '[role="main"]',
+  ];
+
+  const seen = new Set<Element>();
+  let best: { text: string; score: number } | null = null;
+
+  for (const selector of selectorGroups) {
+    for (const element of Array.from(doc.querySelectorAll(selector)).slice(0, 8)) {
+      if (seen.has(element)) continue;
+      seen.add(element);
+
+      const text = normalizeBlockText(element);
+      if (text.length < 300 || text.length > 20000) continue;
+
+      const identifier = `${element.className} ${element.id} ${element.getAttribute('role') ?? ''}`;
+      if (/(nav|menu|header|footer|sidebar|comment|cookie|banner)/i.test(identifier)) continue;
+
+      const lower = text.toLowerCase();
+      const keywordHits = JOB_DESCRIPTION_KEYWORDS.reduce(
+        (sum, keyword) => sum + (lower.includes(keyword) ? 1 : 0),
+        0
+      );
+      if (keywordHits < 2 && !/description/i.test(identifier)) continue;
+
+      const structure = Math.min(20, element.querySelectorAll('p, li').length);
+      const boost = /description|job|article|main/i.test(identifier) ? 6 : 0;
+      const score = keywordHits * 3 + structure + boost + Math.min(8, text.length / 1000);
+      if (!best || score > best.score) best = { text, score };
+    }
   }
-  return null;
+
+  if (!best && doc.body) {
+    const fallback = normalizeBlockText(doc.body);
+    if (fallback.length > 300) best = { text: fallback, score: 0 };
+  }
+
+  return best ? best.text.substring(0, 8000) : null;
 }

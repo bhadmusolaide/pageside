@@ -4,6 +4,7 @@ import { clampContextBudget, clampHistoryLimit } from '../lib/usage';
 import { TONES, LANGUAGES, UI_LANGUAGES } from '../lib/options';
 import type { ModelOption } from '../lib/messaging';
 import { getUiLocale, subscribeLocale, t } from '../lib/i18n';
+import { getProviderConfig, isChatModel } from '../lib/provider';
 
 interface SettingsData {
   apiKey: string;
@@ -21,7 +22,7 @@ interface SettingsData {
 const DEFAULTS: SettingsData = {
   apiKey: '',
   provider: 'openrouter',
-  model: 'anthropic/claude-3.5-sonnet',
+  model: 'anthropic/claude-sonnet-5.5',
   tone: 'professional',
   maxLength: 500,
   language: 'en',
@@ -31,22 +32,57 @@ const DEFAULTS: SettingsData = {
   historyContextLimit: 3,
 };
 
-const PROVIDER_LABELS: Record<string, string> = {
-  openrouter: 'OpenRouter',
-  anthropic: 'Anthropic',
+interface ProviderInfo {
+  label: string;
+  keyHint: string;
+  keyPlaceholder: string;
+  modelPlaceholder: string;
+}
+
+const PROVIDER_INFO: Record<string, ProviderInfo> = {
+  openrouter: {
+    label: 'OpenRouter',
+    keyHint: 'Get a key at https://openrouter.ai/keys. You can use any model listed there.',
+    keyPlaceholder: 'sk-or-v1-...',
+    modelPlaceholder: 'anthropic/claude-sonnet-5.5',
+  },
+  anthropic: {
+    label: 'Anthropic',
+    keyHint: 'Get a key at https://console.anthropic.com.',
+    keyPlaceholder: 'sk-ant-...',
+    modelPlaceholder: 'claude-sonnet-5-5',
+  },
+  openai: {
+    label: 'OpenAI',
+    keyHint: 'Get a key at https://platform.openai.com/api-keys.',
+    keyPlaceholder: 'sk-...',
+    modelPlaceholder: 'gpt-4o-mini',
+  },
+  grok: {
+    label: 'Grok (xAI)',
+    keyHint: 'Get a key at https://console.x.ai/.',
+    keyPlaceholder: 'xai-...',
+    modelPlaceholder: 'grok-4',
+  },
+  groq: {
+    label: 'Groq',
+    keyHint: 'Get a key at https://console.groq.com/keys.',
+    keyPlaceholder: 'gsk_...',
+    modelPlaceholder: 'llama-3.3-70b-versatile',
+  },
 };
 
 const MODEL_SUGGESTIONS: Record<string, string[]> = {
   openrouter: [
-    'anthropic/claude-3.5-sonnet',
-    'anthropic/claude-3.7-sonnet',
-    'anthropic/claude-sonnet-4-0',
+    'anthropic/claude-sonnet-5.5',
+    'anthropic/claude-haiku-5.5',
+    'anthropic/claude-opus-5.5',
     'openai/gpt-4o',
     'openai/gpt-4o-mini',
-    'google/gemini-2.0-flash',
-    'meta-llama/llama-3.3-70b-instruct',
+    'x-ai/grok-4.7',
+    'google/gemini-3.8-flash',
     'deepseek/deepseek-chat',
-    'mistralai/mistral-large-latest',
+    'meta-llama/llama-3.3-70b-instruct',
   ],
   anthropic: [
     'claude-sonnet-5-5',
@@ -54,6 +90,30 @@ const MODEL_SUGGESTIONS: Record<string, string[]> = {
     'claude-haiku-5-5',
     'claude-opus-4-5',
     'claude-haiku-4-7',
+  ],
+  openai: [
+    'gpt-4o',
+    'gpt-4o-mini',
+    'gpt-4.1',
+    'gpt-4.1-mini',
+    'o3-mini',
+    'o1-mini',
+  ],
+  grok: [
+    'grok-4',
+    'grok-4-fast-reasoning',
+    'grok-4-fast-non-reasoning',
+    'grok-3',
+    'grok-3-mini',
+    'grok-2-latest',
+  ],
+  groq: [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b',
+    'deepseek-r1-distill-llama-70b',
+    'qwen/qwen3-32b',
   ],
 };
 
@@ -75,28 +135,28 @@ async function saveSettings(data: SettingsData): Promise<void> {
 }
 
 async function fetchProviderModels(provider: string, apiKey: string): Promise<ModelOption[]> {
-  if (provider === 'openrouter') {
-    const response = await fetch('https://openrouter.ai/api/v1/models');
-    if (!response.ok) throw new Error(`OpenRouter returned ${response.status}.`);
-    const body = await response.json() as { data?: Array<{ id?: string; name?: string }> };
-    return (body.data ?? [])
-      .filter(model => typeof model.id === 'string' && model.id.trim())
-      .map(model => ({ id: model.id!.trim(), name: model.name?.trim() }))
-      .sort((a, b) => a.id.localeCompare(b.id));
+  const config = getProviderConfig(provider);
+  if (config.modelsRequireKey && !apiKey.trim()) {
+    throw new Error(`Enter an API key to load ${config.label} models.`);
   }
-
-  if (!apiKey.trim()) throw new Error('Enter an API key to load Anthropic models.');
-  const response = await fetch('https://api.anthropic.com/v1/models?limit=1000', {
-    headers: {
-      'x-api-key': apiKey.trim(),
-      'anthropic-version': '2023-06-01',
-    },
+  const response = await fetch(config.modelsUrl, {
+    headers: config.buildModelsHeaders(apiKey),
   });
-  if (!response.ok) throw new Error(`Anthropic returned ${response.status}.`);
-  const body = await response.json() as { data?: Array<{ id?: string; display_name?: string }> };
+  if (!response.ok) {
+    throw new Error(response.status === 401 || response.status === 403
+      ? `${config.label} rejected the API key.`
+      : `${config.label} returned ${response.status}.`);
+  }
+  const body = await response.json() as {
+    data?: Array<{ id?: string; name?: string; display_name?: string }>;
+  };
   return (body.data ?? [])
     .filter(model => typeof model.id === 'string' && model.id.trim())
-    .map(model => ({ id: model.id!.trim(), name: model.display_name?.trim() }))
+    .filter(model => isChatModel(provider, model.id!.trim()))
+    .map(model => ({
+      id: model.id!.trim(),
+      name: (model.name ?? model.display_name)?.trim(),
+    }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -318,15 +378,18 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
           <select
             className="w-full border border-gray-400 rounded px-3 py-2 text-sm"
             value={settings.provider}
-            onChange={e => update('provider', e.target.value)}
+            onChange={e => {
+              const provider = e.target.value;
+              update('provider', provider);
+              update('model', MODEL_SUGGESTIONS[provider]?.[0] ?? '');
+            }}
           >
-            <option value="openrouter">OpenRouter</option>
-            <option value="anthropic">Anthropic</option>
+            {Object.entries(PROVIDER_INFO).map(([value, info]) => (
+              <option key={value} value={value}>{info.label}</option>
+            ))}
           </select>
           <p className="text-xs text-gray-600 mt-1">
-            {settings.provider === 'openrouter'
-              ? 'Get a key at https://openrouter.ai/keys. You can use any model listed there.'
-              : 'Get a key at https://console.anthropic.com.'}
+            {(PROVIDER_INFO[settings.provider] ?? PROVIDER_INFO.openrouter).keyHint}
           </p>
         </div>
 
@@ -356,7 +419,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
             id="sr-api-key"
             type={showKey ? 'text' : 'password'}
             className="w-full border border-gray-400 rounded px-3 py-2 text-sm font-mono"
-            placeholder={settings.provider === 'openrouter' ? 'sk-or-v1-...' : 'sk-ant-...'}
+            placeholder={(PROVIDER_INFO[settings.provider] ?? PROVIDER_INFO.openrouter).keyPlaceholder}
             value={settings.apiKey}
             onChange={e => update('apiKey', e.target.value)}
           />
@@ -387,7 +450,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
               aria-activedescendant={modelOpen && filteredModels[activeModelIndex] ? `sr-model-option-${activeModelIndex}` : undefined}
               autoComplete="off"
               className="w-full border border-gray-400 rounded px-3 py-2 text-sm font-mono"
-              placeholder={settings.provider === 'openrouter' ? 'anthropic/claude-3.5-sonnet' : 'claude-sonnet-5-5'}
+              placeholder={(PROVIDER_INFO[settings.provider] ?? PROVIDER_INFO.openrouter).modelPlaceholder}
               value={settings.model}
               onFocus={() => setModelOpen(true)}
               onChange={e => {
