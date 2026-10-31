@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Applyra — Test Forms</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #333; }
+  h1 { color: #111; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.5rem; margin: 1.5rem 0; }
+  h2 { font-size: 1.1rem; margin-top: 0; }
+  label { display: block; margin: 0.5rem 0 0.25rem; font-weight: 500; }
+  input, textarea, select { display: block; width: 100%; padding: 0.5rem; border: 1px solid #aaa; border-radius: 4px; box-sizing: border-box; }
+  .field-group { margin-bottom: 0.75rem; }
+  button { padding: 0.5rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  .note { font-size: 0.85rem; color: #888; margin-top: 0.25rem; }
+  .react-simulated { position: relative; }
+  .react-simulated input { background: #f0f7ff; }
+  [contenteditable] { border: 1px solid #aaa; border-radius: 4px; padding: 0.5rem; min-height: 3rem; }
+  hr { margin: 1.5rem 0; border: 0; border-top: 2px dashed #ccc; }
+</style>
+</head>
+<body>
+
+<h1>Applyra — Test Forms</h1>
+<p>This page contains sample form fields for testing the extension. Each section tests a different scenario.</p>
+
+<section>
+  <h2>1. Plain HTML Form</h2>
+  <form>
+    <div class="field-group">
+      <label for="full-name">Full Name <span style="color:#c00">*</span></label>
+      <input id="full-name" name="name" type="text" required placeholder="e.g. Jane Smith">
+    </div>
+    <div class="field-group">
+      <label for="email">Email Address</label>
+      <input id="email" name="email" type="email" placeholder="you@example.com">
+    </div>
+    <div class="field-group">
+      <label for="phone">Phone</label>
+      <input id="phone" name="phone" type="tel">
+    </div>
+    <div class="field-group">
+      <label for="linkedin">LinkedIn URL</label>
+      <input id="linkedin" name="linkedin" type="url" placeholder="https://linkedin.com/in/yourname">
+    </div>
+    <div class="field-group">
+      <label for="why-role">Why are you interested in this role?</label>
+      <textarea id="why-role" name="why_role" rows="3" placeholder="Tell us about your motivation..."></textarea>
+    </div>
+    <div class="field-group">
+      <label for="experience">Describe your relevant experience</label>
+      <textarea id="experience" name="experience" rows="4" maxlength="2000"></textarea>
+    </div>
+    <div class="field-group">
+      <label for="start-date">Earliest start date</label>
+      <input id="start-date" name="start_date" type="date">
+    </div>
+    <div class="field-group">
+      <label for="salary">Salary expectations</label>
+      <select id="salary" name="salary">
+        <option value="">-- Select --</option>
+        <option value="<50k">Under $50k</option>
+        <option value="50-80k">$50k - $80k</option>
+        <option value="80-120k">$80k - $120k</option>
+        <option value="120k+">$120k+</option>
+      </select>
+    </div>
+  </form>
+</section>
+
+<section>
+  <h2>2. Fields With aria-label / aria-labelledby</h2>
+  <div class="field-group">
+    <span id="desc-github">GitHub Profile</span>
+    <input aria-labelledby="desc-github" name="github" type="url" placeholder="https://github.com/username">
+  </div>
+  <div class="field-group">
+    <input aria-label="Portfolio Website" name="portfolio" type="url" placeholder="https://...">
+  </div>
+  <div class="field-group">
+    <span>How did you hear about us?</span>
+    <input aria-label="Referral source" name="referral" type="text" placeholder="e.g. LinkedIn, friend, job board">
+  </div>
+</section>
+
+<section>
+  <h2>3. Textarea + Open-Ended Questions</h2>
+  <div class="field-group">
+    <label for="strengths">What are your greatest strengths?</label>
+    <textarea id="strengths" rows="3"></textarea>
+  </div>
+  <div class="field-group">
+    <label for="challenge">Describe a challenging project you worked on</label>
+    <textarea id="challenge" rows="4"></textarea>
+  </div>
+  <div class="field-group">
+    <label for="goals">What are your career goals for the next 3–5 years?</label>
+    <textarea id="goals" rows="3"></textarea>
+  </div>
+  <div class="field-group">
+    <label for="teamwork">Tell us about a time you worked effectively in a team</label>
+    <textarea id="teamwork" rows="4"></textarea>
+  </div>
+</section>
+
+<section>
+  <h2>4. Contenteditable Fields</h2>
+  <div class="field-group">
+    <label>Cover letter (contenteditable)</label>
+    <div contenteditable="true" style="min-height:4rem" placeholder="Write your cover letter here..."></div>
+  </div>
+  <div class="field-group">
+    <label>Brief introduction (contenteditable)</label>
+    <p contenteditable="true" style="min-height:3rem" aria-label="Brief introduction"></p>
+  </div>
+</section>
+
+<section>
+  <h2>5. Shadow DOM Fields</h2>
+  <div class="field-group" id="shadow-host-1">
+    <p>Fields inside this container are rendered in a Shadow DOM:</p>
+  </div>
+  <div class="field-group" id="shadow-host-2">
+    <p>Open-ended question inside shadow root:</p>
+  </div>
+</section>
+
+<script>
+  // Shadow DOM 1 — factual fields
+  const host1 = document.getElementById('shadow-host-1');
+  const shadow1 = host1.attachShadow({ mode: 'open' });
+  shadow1.innerHTML = `
+    <label for="shadow-name">Full Name</label>
+    <input id="shadow-name" name="shadow_name" type="text" placeholder="Name in shadow">
+
+    <label for="shadow-email" style="display:block;margin-top:0.5rem">Email</label>
+    <input id="shadow-email" name="shadow_email" type="email" placeholder="email@shadow.com">
+  `;
+
+  // Shadow DOM 2 — open-ended question
+  const host2 = document.getElementById('shadow-host-2');
+  const shadow2 = host2.attachShadow({ mode: 'open' });
+  shadow2.innerHTML = `
+    <label for="shadow-essay">Why do you want to join our team?</label>
+    <textarea id="shadow-essay" name="shadow_essay" rows="3" style="width:100%"></textarea>
+  `;
+</script>
+
+<section>
+  <h2>6. Fieldset with Legend</h2>
+  <fieldset>
+    <legend>Work Authorization</legend>
+    <div class="field-group">
+      <label for="visa-status">Visa status</label>
+      <select id="visa-status" name="visa_status">
+        <option value="">-- Select --</option>
+        <option value="us_citizen">US Citizen</option>
+        <option value="green_card">Permanent Resident</option>
+        <option value="visa">Visa holder (specify)</option>
+        <option value="need_sponsor">Need sponsorship</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label for="visa-details">If visa holder, please provide details</label>
+      <textarea id="visa-details" name="visa_details" rows="2"></textarea>
+    </div>
+  </fieldset>
+</section>
+
+<section>
+  <h2>7. Hidden / Non-Applicable Fields</h2>
+  <p class="note">The extension should ignore these or handle gracefully.</p>
+  <div class="field-group">
+    <input type="hidden" name="csrf_token" value="abc123">
+    <label for="hp">Honeypot (should be invisible)</label>
+    <input id="hp" name="website" type="text" style="display:none" tabindex="-1">
+  </div>
+  <div class="field-group">
+    <input type="submit" value="Submit Application">
+    <input type="reset" value="Reset">
+    <button>Apply Now</button>
+  </div>
+</section>
+
+<section>
+  <h2>8. Iframe (loaded from same origin)</h2>
+  <iframe src="./iframe-form.html" style="width:100%;height:280px;border:1px solid #999"></iframe>
+  <p class="note">The extension should scan fields inside iframes when all_frames is enabled.</p>
+</section>
+
+<hr>
+
+<p><em>End of test page. Open the extension's side panel or use the "Scan Page" command to test field detection.</em></p>
+
+</body>
+</html>

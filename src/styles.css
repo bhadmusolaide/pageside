@@ -1,0 +1,186 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+[role="tab"] {
+  min-height: 44px;
+}
+
+/*
+ * Dark theme. Tailwind utilities are emitted in a cascade layer, so these
+ * unlayered overrides win without !important. Kept centralized so components
+ * stay readable and the theme can be swapped at runtime.
+ */
+html.sr-dark {
+  color-scheme: dark;
+}
+
+html.sr-dark body,
+html.sr-dark .bg-gray-50 {
+  background-color: #0b1120;
+  color: #e5e7eb;
+}
+
+html.sr-dark .bg-white {
+  background-color: #111827;
+}
+
+html.sr-dark .bg-gray-100,
+html.sr-dark .hover\:bg-gray-100:hover {
+  background-color: #1f2937;
+}
+
+html.sr-dark .bg-gray-200 {
+  background-color: #374151;
+}
+
+html.sr-dark .hover\:bg-gray-200:hover,
+html.sr-dark .hover\:bg-gray-50:hover,
+html.sr-dark .hover\:bg-gray-300:hover {
+  background-color: #374151;
+}
+
+html.sr-dark .bg-blue-50 {
+  background-color: #172554;
+}
+
+html.sr-dark .hover\:bg-blue-100:hover {
+  background-color: #1e3a8a;
+}
+
+html.sr-dark .bg-green-50,
+html.sr-dark .bg-green-100 {
+  background-color: #052e1b;
+}
+
+html.sr-dark .hover\:bg-green-100:hover {
+  background-color: #064e3b;
+}
+
+html.sr-dark .bg-amber-50,
+html.sr-dark .bg-amber-100 {
+  background-color: #3b2a06;
+}
+
+html.sr-dark .hover\:bg-amber-100:hover {
+  background-color: #4a3508;
+}
+
+html.sr-dark .bg-red-50,
+html.sr-dark .bg-red-100 {
+  background-color: #3f1d1d;
+}
+
+html.sr-dark .hover\:bg-red-100:hover {
+  background-color: #4c1d1d;
+}
+
+html.sr-dark .bg-indigo-100 {
+  background-color: #312e81;
+}
+
+html.sr-dark .text-gray-900,
+html.sr-dark .text-gray-800 {
+  color: #f3f4f6;
+}
+
+html.sr-dark .text-gray-700 {
+  color: #d1d5db;
+}
+
+html.sr-dark .text-gray-600 {
+  color: #9ca3af;
+}
+
+html.sr-dark .text-gray-500 {
+  color: #9ca3af;
+}
+
+html.sr-dark .text-blue-700,
+html.sr-dark .text-blue-800 {
+  color: #93c5fd;
+}
+
+html.sr-dark .text-green-700,
+html.sr-dark .text-green-800 {
+  color: #86efac;
+}
+
+html.sr-dark .text-amber-800,
+html.sr-dark .text-amber-900 {
+  color: #fcd34d;
+}
+
+html.sr-dark .text-red-700,
+html.sr-dark .text-red-800 {
+  color: #fca5a5;
+}
+
+html.sr-dark .text-indigo-800 {
+  color: #c7d2fe;
+}
+
+html.sr-dark .border-gray-200 {
+  border-color: #1f2937;
+}
+
+html.sr-dark .border-gray-300 {
+  border-color: #374151;
+}
+
+html.sr-dark .border-gray-400 {
+  border-color: #4b5563;
+}
+
+html.sr-dark .border-red-200,
+html.sr-dark .border-red-400 {
+  border-color: #7f1d1d;
+}
+
+html.sr-dark .border-green-400 {
+  border-color: #166534;
+}
+
+html.sr-dark .border-amber-200,
+html.sr-dark .border-amber-300 {
+  border-color: #78350f;
+}
+
+html.sr-dark .border-blue-300 {
+  border-color: #1d4ed8;
+}
+
+html.sr-dark input,
+html.sr-dark select,
+html.sr-dark textarea {
+  background-color: #0f172a;
+  color: #e5e7eb;
+  border-color: #4b5563;
+}
+
+html.sr-dark input::placeholder,
+html.sr-dark textarea::placeholder {
+  color: #6b7280;
+}
+
+html.sr-dark .shadow-sm,
+html.sr-dark .shadow {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+html.sr-dark button.bg-blue-600:hover,
+html.sr-dark .hover\:bg-blue-700:hover {
+  background-color: #1d4ed8;
+}
