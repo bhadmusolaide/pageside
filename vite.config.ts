@@ -10,7 +10,7 @@ export default defineConfig({
     crx({
       manifest: {
         manifest_version: 3,
-        name: 'Applyra',
+        name: 'Pageside',
         version: '1.0.0',
         description: 'Draft tailored answers for application form questions using your personal vault',
         permissions: ['storage', 'activeTab', 'tabs', 'clipboardWrite', 'sidePanel', 'scripting', 'webNavigation', 'unlimitedStorage'],
@@ -62,14 +62,14 @@ export default defineConfig({
           type: 'module',
         },
         content_scripts: [{
-          matches: ['https://applyra.invalid/*'],
+          matches: ['https://pageside.invalid/*'],
           all_frames: true,
           match_about_blank: true,
           js: ['src/content/index.ts'],
           run_at: 'document_end',
         }],
         action: {
-          default_title: 'Applyra',
+          default_title: 'Pageside',
           default_icon: {
             16: 'icons/icon16.png',
             32: 'icons/icon32.png',

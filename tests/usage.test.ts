@@ -27,7 +27,7 @@ test('history limit is capped at ten entries', () => {
 test('output budget scales with word limit and stays below the old fixed cap', () => {
   assert.ok(outputBudgetFor(500) < 4096);
   assert.ok(outputBudgetFor(2000) <= 2048);
-  assert.equal(outputBudgetFor(500, true), 900);
+  assert.equal(outputBudgetFor(500, true), 2048);
 });
 
 test('provider usage is used when available and estimated otherwise', () => {

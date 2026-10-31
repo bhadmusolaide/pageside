@@ -32,3 +32,10 @@ test('stream API errors preserve the provider message', () => {
   assert.equal(error.code, 'api_error');
   assert.equal(error.message, 'API error (500): boom');
 });
+
+test('empty model responses are retryable and suggest settings', () => {
+  const error = fieldErrorFromStream('empty_response', 'no text');
+  assert.equal(error.code, 'empty_response');
+  assert.equal(error.retryable, true);
+  assert.equal(error.action?.optionsTab, 'settings');
+});

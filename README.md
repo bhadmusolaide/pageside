@@ -1,4 +1,4 @@
-# Applyra
+# Pageside
 
 Manifest V3 Chrome extension that reads the current page, detects form questions/fields, and drafts tailored answers using a personal data vault. Never auto-submits forms. No backend — bring your own provider API key.
 
@@ -126,7 +126,7 @@ test-pages/       # Sample forms for manual testing
 
 ## Hardening & remaining spec gaps
 
-- **Runtime per-site permissions**: the content script is not injected until you enable a site. Enabling registers a content script for that origin at runtime and requests its host permission; the background waits for the injected script to answer a ping, and the panel retries its first refresh, so a single click is enough. Disabling unregisters the script and tears the UI down. The manifest keeps `<all_urls>` as an optional host permission only.
+- **Runtime per-site permissions**: the content script is not injected until you enable a site. Enabling registers a content script for that origin at runtime and requests its host permission; the background waits for the injected script to answer a ping, and the panel retries its first refresh, so a single click is enough. Enabled origins are stored locally and re-registered when the service worker starts, and the panel silently reconnects when the host permission is still granted. Disabling unregisters the script, forgets the origin, and tears the UI down. The manifest keeps `<all_urls>` as an optional host permission only. Reloading an unpacked extension (or installing an update) can make Chrome drop runtime-granted optional host permissions, so a re-prompt after a developer reload is expected; the extension still remembers enabled origins and restores their content scripts once permission is available.
 - **Inline draft editing**: the answer card draft is an editable textarea. Edits are used by Insert and Copy.
 - **Undo**: Insert actions can be undone from the answer card or the side panel. `filler.ts` keeps the previous value per field.
 - **Iframe aggregation**: the side panel scans and lists fields from every frame it is injected into, showing the frame id when it is not the top frame. Cross-origin iframes still need their own host permission.

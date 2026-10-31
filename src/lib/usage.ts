@@ -88,7 +88,7 @@ export function clampHistoryLimit(value: unknown): number {
 }
 
 export function outputBudgetFor(maxLength: number, document = false): number {
-  if (document) return 900;
+  if (document) return 2048;
   const words = Number.isFinite(maxLength) ? Math.max(1, maxLength) : 500;
   return Math.min(2048, Math.max(128, Math.ceil(words * 1.6) + 100));
 }

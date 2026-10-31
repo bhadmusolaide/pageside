@@ -104,7 +104,7 @@ export function App() {
         <div className="max-w-4xl mx-auto px-6 py-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Applyra</h1>
+              <h1 className="text-2xl font-bold text-gray-900">Pageside</h1>
               <p className="text-sm text-gray-600 mt-1">Vault, Profiles, History & Settings</p>
             </div>
             <ThemeToggle />

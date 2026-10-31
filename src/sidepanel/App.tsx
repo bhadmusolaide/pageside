@@ -146,7 +146,7 @@ async function injectTemporarily(tabId: number): Promise<boolean> {
   try {
     await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files });
   } catch (e) {
-    console.warn('[Applyra] Temporary injection failed:', e);
+    console.warn('[Pageside] Temporary injection failed:', e);
     return false;
   }
 
@@ -184,6 +184,7 @@ export function App() {
   });
   const originRef = useRef<string | null>(null);
   const tabIdRef = useRef<number | null>(null);
+  const autoEnableAttempted = useRef<Set<string>>(new Set());
 
   const checkHealth = useCallback(async () => {
     try {
@@ -242,6 +243,37 @@ export function App() {
 
     merged.sort((a, b) => a.frameId - b.frameId);
     setQuestions(merged);
+
+    if (!responded) {
+      // The host permission can survive an extension reload while the dynamic
+      // content script registration is cleared. Recover silently in that case
+      // instead of asking the user to enable the site again.
+      const pattern = originRef.current;
+      const key = pattern ? `${tab.id}:${pattern}` : null;
+      if (pattern && key && !autoEnableAttempted.current.has(key)) {
+        autoEnableAttempted.current.add(key);
+        try {
+          const granted = await chrome.permissions.contains({ origins: [pattern] });
+          if (granted) {
+            const response = await chrome.runtime.sendMessage({
+              type: 'enable_site',
+              tabId: tab.id,
+              origin: pattern,
+            });
+            if (response?.enabled) {
+              setNeedsEnable(false);
+              setNotice('Reconnecting to this site…');
+              window.setTimeout(() => { void refresh(); }, 250);
+              return true;
+            }
+          }
+        } catch {
+          /* fall through to the normal enable state */
+        }
+        autoEnableAttempted.current.delete(key);
+      }
+    }
+
     setNeedsEnable(!responded);
     setNotice('');
     setConfirmBulk(false);
@@ -390,7 +422,7 @@ export function App() {
 
     const finish = (message?: string) => {
       if (message) {
-        console.warn('[Applyra] Enable site:', message);
+        console.warn('[Pageside] Enable site:', message);
         setNotice(message);
       }
       setEnabling(false);

@@ -33,6 +33,10 @@ const DEFAULTS: Record<FieldErrorCode, Omit<FieldError, 'message' | 'code'>> = {
     retryable: true,
     action: { label: 'Open Settings', optionsTab: 'settings' },
   },
+  empty_response: {
+    retryable: true,
+    action: { label: 'Open Settings', optionsTab: 'settings' },
+  },
   unknown: {
     retryable: true,
   },
@@ -70,6 +74,11 @@ export function fieldErrorFromStream(code: string, message: string): FieldError 
       );
     case 'api_error':
       return makeFieldError('api_error', message || 'The model API returned an error.');
+    case 'empty_response':
+      return makeFieldError(
+        'empty_response',
+        'The model returned no text. Reasoning models can use the whole output budget on reasoning; try again, increase Max Length, or switch models.'
+      );
     default:
       return makeFieldError('unknown', message || 'Something went wrong. Try again.');
   }

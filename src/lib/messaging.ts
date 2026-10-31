@@ -22,6 +22,7 @@ export type FieldErrorCode =
   | 'network'
   | 'no_connection'
   | 'api_error'
+  | 'empty_response'
   | 'unknown';
 
 export interface FieldError {
@@ -62,7 +63,7 @@ export type StreamEvent =
       type: 'error';
       requestId: string;
       error: string;
-      code: 'bad_key' | 'rate_limit' | 'api_error' | 'network' | 'unknown';
+      code: 'bad_key' | 'rate_limit' | 'api_error' | 'network' | 'empty_response' | 'unknown';
       usage?: GenerationUsage;
     };
 

@@ -399,7 +399,7 @@ export function VaultManager() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `applyra-vault-${profileName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${new Date().toISOString().substring(0, 10)}.json`;
+      a.download = `pageside-vault-${profileName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${new Date().toISOString().substring(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {

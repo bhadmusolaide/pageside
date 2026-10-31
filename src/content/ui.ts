@@ -59,7 +59,7 @@ const TOOLBAR_HTML = `
 </style>
 <div id="__sr-toolbar">
   <div id="__sr-menu">
-    <div class="label">Applyra</div>
+    <div class="label">Pageside</div>
     <div class="label">Vault profile</div>
     <select id="__sr-vault-profile"></select>
     <div class="sep"></div>
@@ -253,6 +253,7 @@ const DOC_HTML = `
       <button class="primary" id="__sr-doc-copy">Copy</button>
       <button id="__sr-doc-download">Download .txt</button>
       <button id="__sr-doc-save-vault">Save to Vault</button>
+      <button id="__sr-doc-retry">Try Again</button>
       <span class="doc-note" id="__sr-doc-note"></span>
     </div>
   </div>
@@ -819,6 +820,7 @@ export function showDocModal(
   onCopy: (text: string) => void,
   onDownload: (text: string) => void,
   onSaveVault: (text: string) => void,
+  onRetry: () => void,
   onClose: () => void
 ): DocModalHandle {
   closeDocModal();
@@ -845,6 +847,7 @@ export function showDocModal(
   shadow.getElementById('__sr-doc-copy')?.addEventListener('click', () => onCopy(bodyEl.textContent ?? ''));
   shadow.getElementById('__sr-doc-download')?.addEventListener('click', () => onDownload(bodyEl.textContent ?? ''));
   shadow.getElementById('__sr-doc-save-vault')?.addEventListener('click', () => onSaveVault(bodyEl.textContent ?? ''));
+  shadow.getElementById('__sr-doc-retry')?.addEventListener('click', () => onRetry());
 
   document.documentElement?.appendChild(host);
 

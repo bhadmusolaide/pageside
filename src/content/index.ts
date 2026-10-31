@@ -141,7 +141,7 @@ function handleError(err: unknown): void {
     markContextInvalid();
     return;
   }
-  console.warn('[Applyra]', err);
+  console.warn('[Pageside]', err);
 }
 
 function run(promise: Promise<unknown>): void {
@@ -229,7 +229,7 @@ async function loadVaultItems(retries = 1, profileId?: string): Promise<VaultIte
     try {
       const response = await chrome.runtime.sendMessage({ type: 'get_vault_items', vaultProfileId: targetProfileId });
       if (response && (response as any).error) {
-        console.warn('[Applyra] Vault read failed:', (response as any).error);
+        console.warn('[Pageside] Vault read failed:', (response as any).error);
         return null;
       }
       if (response && Array.isArray((response as any).items)) {
@@ -624,7 +624,10 @@ function onStreamEvent(event: StreamEvent): void {
   } else if (event.type === 'done') {
     lastMeta = { sources: event.sources, flags: event.untraceableClaims };
     const sourceTitles = event.sources.map(s => s.title);
-    const cleanAnswer = sanitizeAnswerStyle(stripNeedsInputMarkers(event.answer));
+    const rawAnswer = event.answer.trim();
+    let cleanAnswer = sanitizeAnswerStyle(stripNeedsInputMarkers(rawAnswer));
+    // Never let cleanup turn a non-empty model response into a blank draft.
+    if (!cleanAnswer && rawAnswer) cleanAnswer = rawAnswer;
 
     if (target.kind === 'doc') {
       target.handle.update(cleanAnswer, false);
@@ -757,9 +760,16 @@ async function generate(
     }
   };
 
+  const requestId = activeRequestId!;
+  // Register the completion resolver before posting so a very fast done/error
+  // event cannot arrive before we are waiting for it.
+  const completion = new Promise<void>(resolve => {
+    pendingResolvers.set(requestId, resolve);
+  });
+
   const port = getStreamPort();
   if (!port) {
-    settleRequest(activeRequestId!);
+    settleRequest(requestId);
     failLocally(makeFieldError('no_connection', 'The extension connection was lost. Refresh the page and try again.'));
     return;
   }
@@ -767,7 +777,7 @@ async function generate(
     port.postMessage({
       channel: 'sr_stream',
       type: 'start',
-      requestId: activeRequestId,
+      requestId,
       prompt,
       systemPrompt,
       sources,
@@ -775,12 +785,11 @@ async function generate(
     } satisfies StreamRequest);
   } catch (err) {
     handleError(err);
-    settleRequest(activeRequestId!);
+    settleRequest(requestId);
     failLocally(makeFieldError('no_connection', 'The connection to the extension was lost. Refresh the page and try again.'));
     return;
   }
 
-  const requestId = activeRequestId!;
   const timeout = setTimeout(() => {
     if (activeRequestId === requestId) {
       cancelActiveRequest();
@@ -788,9 +797,7 @@ async function generate(
     }
   }, REQUEST_TIMEOUT_MS);
 
-  await new Promise<void>(resolve => {
-    pendingResolvers.set(requestId, resolve);
-  });
+  await completion;
 
   clearTimeout(timeout);
 }
@@ -1254,6 +1261,7 @@ async function generateDocument(kind: DocumentKind): Promise<void> {
     text => { if (text.trim()) void navigator.clipboard.writeText(text).catch(() => { }); },
     text => downloadText(`${title.toLowerCase().replace(/\s+/g, '-')}.txt`, text),
     text => { if (activeDocHandle) void saveDocumentToVault(activeDocHandle, text); },
+    () => { run(generateDocument(kind)); },
     () => {
       activeDocHandle = null;
       cancelActiveRequest();
@@ -1289,7 +1297,7 @@ async function generateDocument(kind: DocumentKind): Promise<void> {
     kind: 'doc',
     handle,
     title: fullTitle,
-  });
+  }, outputBudgetFor(0, true));
 }
 
 async function saveDocumentToVault(handle: DocModalHandle, text: string): Promise<void> {

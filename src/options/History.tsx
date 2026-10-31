@@ -8,7 +8,7 @@ function downloadCsv(csv: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `applyra-history-${new Date().toISOString().substring(0, 10)}.csv`;
+  a.download = `pageside-history-${new Date().toISOString().substring(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }

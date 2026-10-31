@@ -231,7 +231,7 @@ async function handleGetVaultItems(
     const items = await getAllItems(profileId);
     sendResponse({ type: 'vault_items', items, profileId });
   } catch (err) {
-    console.warn('[Applyra] Failed to read vault:', err);
+    console.warn('[Pageside] Failed to read vault:', err);
     sendResponse({ type: 'vault_items', items: [], error: (err as Error)?.message ?? 'Unknown error' });
   }
 }
@@ -244,7 +244,7 @@ async function handleGetSimilarAnswers(
     const items = await findSimilarAnswers(request.question, 3, clampHistoryLimit(request.limit ?? 3));
     sendResponse({ type: 'similar_answers', items });
   } catch (err) {
-    console.warn('[Applyra] Failed to read history:', err);
+    console.warn('[Pageside] Failed to read history:', err);
     sendResponse({ type: 'similar_answers', items: [] });
   }
 }
@@ -257,7 +257,7 @@ async function handleRecordAnswer(
     const id = await addHistoryAnswer(request.question, request.answer, request.sourceIds, request.company);
     sendResponse({ type: 'answer_recorded', id });
   } catch (err) {
-    console.warn('[Applyra] Failed to record answer:', err);
+    console.warn('[Pageside] Failed to record answer:', err);
     sendResponse({ type: 'answer_recorded', id: 0 });
   }
 }
@@ -276,7 +276,7 @@ async function handleSaveVaultItem(
     });
     sendResponse({ type: 'vault_item_saved', id });
   } catch (err) {
-    console.warn('[Applyra] Failed to save vault item:', err);
+    console.warn('[Pageside] Failed to save vault item:', err);
     sendResponse({ type: 'vault_item_saved', id: 0 });
   }
 }
@@ -289,7 +289,7 @@ async function handleGetHistory(
     items.sort((a, b) => b.createdAt - a.createdAt);
     sendResponse({ type: 'history_items', items });
   } catch (err) {
-    console.warn('[Applyra] Failed to read history:', err);
+    console.warn('[Pageside] Failed to read history:', err);
     sendResponse({ type: 'history_items', items: [] });
   }
 }
@@ -302,7 +302,7 @@ async function handleDeleteHistory(
     const deleted = await deleteHistoryAnswer(request.id);
     sendResponse({ type: 'history_deleted', id: request.id, deleted });
   } catch (err) {
-    console.warn('[Applyra] Failed to delete history answer:', err);
+    console.warn('[Pageside] Failed to delete history answer:', err);
     sendResponse({ type: 'history_deleted', id: request.id, deleted: false });
   }
 }
@@ -316,7 +316,7 @@ async function handleExportHistory(
     const csv = toHistoryCsv(items);
     sendResponse({ type: 'history_csv', csv, count: items.length });
   } catch (err) {
-    console.warn('[Applyra] Failed to export history:', err);
+    console.warn('[Pageside] Failed to export history:', err);
     sendResponse({ type: 'history_csv', csv: '', count: 0 });
   }
 }
@@ -390,6 +390,79 @@ async function waitForContentScript(tabId: number, timeoutMs = 3000): Promise<bo
   return false;
 }
 
+const ENABLED_ORIGINS_KEY = 'sr-enabled-origins';
+
+async function getEnabledOrigins(): Promise<string[]> {
+  try {
+    const stored = await chrome.storage.local.get(ENABLED_ORIGINS_KEY);
+    const value = stored[ENABLED_ORIGINS_KEY];
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveEnabledOrigins(origins: string[]): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [ENABLED_ORIGINS_KEY]: [...new Set(origins)] });
+  } catch {
+    /* storage may be unavailable during shutdown */
+  }
+}
+
+async function addEnabledOrigin(pattern: string): Promise<void> {
+  const origins = await getEnabledOrigins();
+  if (!origins.includes(pattern)) await saveEnabledOrigins([...origins, pattern]);
+}
+
+async function removeEnabledOrigin(pattern: string): Promise<void> {
+  const origins = await getEnabledOrigins();
+  if (origins.includes(pattern)) await saveEnabledOrigins(origins.filter(origin => origin !== pattern));
+}
+
+async function registerSiteScript(pattern: string): Promise<boolean> {
+  const files = contentScriptFiles();
+  if (files.length === 0) return false;
+
+  const id = siteScriptId(pattern);
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [id] }).catch(() => []);
+  if (existing.length > 0) {
+    await chrome.scripting.unregisterContentScripts({ ids: [id] }).catch(() => {});
+  }
+
+  await chrome.scripting.registerContentScripts([{
+    id,
+    matches: [pattern],
+    js: files,
+    allFrames: true,
+    runAt: 'document_end',
+    persistAcrossSessions: true,
+  }]);
+  return true;
+}
+
+/*
+ * Dynamic content scripts and runtime host permissions can be cleared when an
+ * unpacked extension is reloaded or the extension updates. On every service
+ * worker start, re-register the scripts for sites the user previously enabled
+ * (only where the host permission is still granted).
+ */
+async function restoreEnabledSites(): Promise<void> {
+  const origins = await getEnabledOrigins();
+  if (origins.length === 0) return;
+
+  for (const pattern of origins) {
+    try {
+      // Keep the stored origin even if the permission was reset; a re-grant
+      // should restore the script without losing the user's intent.
+      if (!(await chrome.permissions.contains({ origins: [pattern] }))) continue;
+      await registerSiteScript(pattern);
+    } catch {
+      /* skip sites that can no longer be registered */
+    }
+  }
+}
+
 async function handleEnableSite(
   request: EnableSiteRequest,
   sendResponse: (response: SiteToggledResponse) => void
@@ -402,26 +475,11 @@ async function handleEnableSite(
       return;
     }
 
-    const files = contentScriptFiles();
-    if (files.length === 0) {
+    if (!(await registerSiteScript(pattern))) {
       sendResponse({ type: 'site_toggled', enabled: false, error: 'Content script bundle is missing. Rebuild the extension.' });
       return;
     }
-
-    const id = siteScriptId(pattern);
-    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [id] }).catch(() => []);
-    if (existing.length > 0) {
-      await chrome.scripting.unregisterContentScripts({ ids: [id] }).catch(() => {});
-    }
-
-    await chrome.scripting.registerContentScripts([{
-      id,
-      matches: [pattern],
-      js: files,
-      allFrames: true,
-      runAt: 'document_end',
-      persistAcrossSessions: true,
-    }]);
+    await addEnabledOrigin(pattern);
 
     if (await contentScriptAlive(request.tabId)) {
       const frames = await chrome.webNavigation.getAllFrames({ tabId: request.tabId }).catch(() => null);
@@ -434,11 +492,11 @@ async function handleEnableSite(
       try {
         await chrome.scripting.executeScript({
           target: { tabId: request.tabId, allFrames: true },
-          files,
+          files: contentScriptFiles(),
         });
       } catch (injectErr) {
         // Cross-origin frames without permission are skipped; the top frame still loads.
-        console.warn('[Applyra] Immediate injection partially failed:', injectErr);
+        console.warn('[Pageside] Immediate injection partially failed:', injectErr);
       }
       // The loader imports its chunks asynchronously, so executeScript can
       // resolve before the message listener is ready. Wait for the first
@@ -448,7 +506,7 @@ async function handleEnableSite(
 
     sendResponse({ type: 'site_toggled', enabled: true });
   } catch (err) {
-    console.warn('[Applyra] Failed to enable site:', err);
+    console.warn('[Pageside] Failed to enable site:', err);
     sendResponse({ type: 'site_toggled', enabled: false, error: (err as Error).message });
   }
 }
@@ -474,9 +532,10 @@ async function handleDisableSite(
       }
     }
     await chrome.permissions.remove({ origins: [pattern] }).catch(() => false);
+    await removeEnabledOrigin(pattern);
     sendResponse({ type: 'site_toggled', enabled: false });
   } catch (err) {
-    console.warn('[Applyra] Failed to disable site:', err);
+    console.warn('[Pageside] Failed to disable site:', err);
     sendResponse({ type: 'site_toggled', enabled: false, error: (err as Error).message });
   }
 }
@@ -627,8 +686,6 @@ async function streamAnswer(
     if (streamError) throw new Error(streamError);
 
     const finalAnswer = fullText.trim();
-    const untraceableClaims = extractNeedsInputFlags(finalAnswer);
-    const sources = sanitizeSources(request.sources);
     const usage = buildUsage({
       systemPrompt: request.systemPrompt,
       prompt: request.prompt,
@@ -637,6 +694,21 @@ async function streamAnswer(
       providerOutput,
       model: settings.model,
     });
+
+    if (!finalAnswer) {
+      post({
+        channel: 'sr_stream',
+        type: 'error',
+        requestId: request.requestId,
+        error: 'The model returned no text. Reasoning models can use the whole output budget on reasoning; try again, increase Max Length, or switch models.',
+        code: 'empty_response',
+        usage,
+      });
+      return;
+    }
+
+    const untraceableClaims = extractNeedsInputFlags(finalAnswer);
+    const sources = sanitizeSources(request.sources);
 
     post({
       channel: 'sr_stream',
@@ -671,3 +743,5 @@ async function streamAnswer(
 function sanitizeSources(sources: AnswerSource[]): AnswerSource[] {
   return (sources ?? []).filter(s => s && typeof s.id === 'number' && typeof s.title === 'string');
 }
+
+void restoreEnabledSites();
