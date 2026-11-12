@@ -5,7 +5,9 @@ A Manifest V3 Chrome extension that reads the current page, detects form questio
 ## Features
 
 - Detects questions and fields across frames, including shadow DOM and contenteditable elements
+- Reads visible question containers instead of opaque machine field names (for example Lever's `cards[...]` names)
 - Grounds drafts in your resume, portfolio, notes, and tone samples, with source attribution
+- Includes a vault-backed chat for ad-hoc questions and drafts from the side panel
 - Streams answers with tone revisions, inline editing, history reuse, and NEEDS INPUT flagging
 - Requires explicit approval before writing to the page, with batch confirmation and undo
 - Supports OpenRouter, Anthropic, OpenAI, Grok (xAI), and Groq
@@ -65,12 +67,21 @@ npm run dev
 
 ## Answer Generation
 
+- **Question detection**: labels resolve from `label[for]`, `aria-label`/`aria-labelledby`, wrapping labels, and the visible question container used by boards such as Lever. Machine field names (`cards[...]`, UUIDs, `field0`) are never shown or sent as the question; a field whose question cannot be read shows an error instead of generating a random answer
 - **Streaming**: answers stream into the card live over a `sr_stream` runtime port
 - **Tone controls**: Shorter, Longer, Casual, and Formal revise the current draft
 - **Sources**: vault items used for each answer are listed under the card
 - **NEEDS INPUT flagging**: missing facts the model cannot source are flagged in red and stripped from the text on insert. Paragraph breaks and line formatting are preserved in drafts, cover letters, video scripts, and inserted text
 - **Answer history**: accepted answers are saved to IndexedDB; similar past questions feed future generations as context, and near-identical ones are reused directly with a "From history" badge
 - **Vault-first drafts**: a vault note whose title matches the question is offered directly with a "From vault" badge, without an LLM call
+
+## Chat
+
+- The side panel switches between **Questions** and **Chat**
+- Chat answers free-form questions with the same local vault retrieval and provider streaming as drafts
+- Replies use the current page context (company, role, job description) when site access is enabled, and fall back to the active tab's title and URL otherwise, so chat works on sites you have not enabled
+- Each reply lists the vault sources it used and shows token/cost usage; replies can be stopped and the conversation can be cleared
+- Conversation history stays in the side panel session and is not saved to IndexedDB
 
 ## Review, Errors, and Accessibility
 
@@ -137,6 +148,7 @@ src/
   components/     # Shared React components
   lib/            # Shared modules
     answerText.ts     # NEEDS INPUT cleanup with whitespace preservation
+    chatPrompt.ts     # Vault-grounded chat system and user prompts
     documentImport.ts # Local DOCX/TXT/Markdown extraction
     errors.ts         # Error taxonomy and recovery actions
     fieldDetector.ts  # Pure field detection (unit-testable)
@@ -175,6 +187,8 @@ npm run build
 3. Click the extension icon, then **Enable on this site** and grant the permission
 4. Click **Scan Page**; detected fields are highlighted
 5. Click a field, or use the side panel, to generate a draft answer
+6. On Lever-style forms, confirm the side panel shows the visible question (for example "Why do you want to work at Acme?") instead of the `cards[...]` field name. `test-pages/forms.html` section 9 reproduces this layout
+7. Switch the side panel to **Chat** and ask a question; chat works with or without site access because it uses the vault plus the active tab's title/URL
 
 For quick testing, serve the test pages over HTTP so runtime permissions behave normally:
 

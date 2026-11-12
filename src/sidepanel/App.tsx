@@ -10,8 +10,10 @@ import type {
   AnswerProvenance,
 } from '../lib/messaging';
 import { formatTokens, formatCost } from '../lib/usage';
+import { isLikelyFieldIdentifier, type PageContext } from '../lib/fieldDetector';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { getUiLocale, subscribeLocale, t } from '../lib/i18n';
+import { Chat } from './Chat';
 
 interface PanelItem extends PanelFieldInfo {
   frameId: number;
@@ -134,6 +136,16 @@ function itemKey(frameId: number, fieldId: string): string {
   return `${frameId}:${fieldId}`;
 }
 
+function displayFieldLabel(field: PanelItem['field']): string {
+  for (const candidate of [field.label, field.placeholder, field.sectionHeading]) {
+    const text = candidate?.trim();
+    if (text && !isLikelyFieldIdentifier(text)) return text;
+  }
+  const name = field.name?.trim();
+  if (name && !isLikelyFieldIdentifier(name)) return name.replace(/[-_]/g, ' ');
+  return '(untitled field)';
+}
+
 function contentScriptFiles(): string[] {
   const manifest = chrome.runtime.getManifest();
   return manifest.content_scripts?.[0]?.js ?? [];
@@ -165,9 +177,12 @@ async function injectTemporarily(tabId: number): Promise<boolean> {
 
 export function App() {
   useSyncExternalStore(subscribeLocale, getUiLocale, getUiLocale);
+  const [view, setView] = useState<'questions' | 'chat'>('questions');
   const [questions, setQuestions] = useState<PanelItem[]>([]);
   const [notice, setNotice] = useState<string>('');
   const [needsEnable, setNeedsEnable] = useState(false);
+  const [siteResponded, setSiteResponded] = useState(false);
+  const [chatPageContext, setChatPageContext] = useState<PageContext | undefined>(undefined);
   const [enabling, setEnabling] = useState(false);
   const [vaultProfileId, setVaultProfileId] = useState('default');
   const [vaultProfiles, setVaultProfiles] = useState<VaultProfileOption[]>([]);
@@ -223,10 +238,14 @@ export function App() {
       override?: boolean;
       matchedProfileName?: string | null;
     } | null = null;
+    let pageContext: PageContext | null = null;
 
     for (const { frameId, response } of results) {
       if (response?.type === 'panel_state') {
         responded = true;
+        if (!pageContext && response.context) {
+          pageContext = response.context as PageContext;
+        }
         if (!profileMeta && response.vaultProfileId) {
           profileMeta = {
             id: response.vaultProfileId as string,
@@ -243,6 +262,7 @@ export function App() {
 
     merged.sort((a, b) => a.frameId - b.frameId);
     setQuestions(merged);
+    setChatPageContext(pageContext ?? undefined);
 
     if (!responded) {
       // The host permission can survive an extension reload while the dynamic
@@ -275,6 +295,7 @@ export function App() {
     }
 
     setNeedsEnable(!responded);
+    setSiteResponded(responded);
     setNotice('');
     setConfirmBulk(false);
     if (profileMeta) {
@@ -537,6 +558,22 @@ export function App() {
           <h1 className="text-base font-bold">{t('panel.title')}</h1>
           <ThemeToggle />
         </div>
+        <div className="mt-2 flex gap-1" role="group" aria-label="Panel view">
+          <button
+            className={`flex-1 px-2 py-1.5 text-xs font-medium rounded ${view === 'questions' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+            aria-pressed={view === 'questions'}
+            onClick={() => setView('questions')}
+          >
+            {t('panel.questions')}
+          </button>
+          <button
+            className={`flex-1 px-2 py-1.5 text-xs font-medium rounded ${view === 'chat' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+            aria-pressed={view === 'chat'}
+            onClick={() => setView('chat')}
+          >
+            {t('panel.chat')}
+          </button>
+        </div>
         <p className="text-xs text-gray-600" aria-live="polite">{t('panel.detected')}{questions.length > 0 ? ` · ${questions.length}` : ''}</p>
         {(sessionUsage.inputTokens > 0 || sessionUsage.outputTokens > 0) && (
           <p className="text-xs text-gray-600 mt-0.5" aria-live="polite">
@@ -565,6 +602,7 @@ export function App() {
         )}
       </header>
 
+      <div className={view === 'questions' ? 'contents' : 'hidden'}>
       <div className="px-3 py-2 flex gap-2 border-b border-gray-200 bg-white">
         <button
           className="flex-1 px-3 py-2.5 min-h-[44px] text-sm font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-600"
@@ -710,6 +748,16 @@ export function App() {
           <FieldCard key={itemKey(q.frameId, q.field.id)} info={q} />
         ))}
       </div>
+      </div>
+
+      <div className={view === 'chat' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
+        <Chat
+          vaultProfileId={siteResponded ? vaultProfileId : undefined}
+          pageContext={chatPageContext}
+          onUsage={addUsage}
+          active={view === 'chat'}
+        />
+      </div>
     </div>
   );
 }
@@ -788,12 +836,13 @@ function FieldCard({ info }: { info: PanelItem }) {
   }
 
   const typeLabel = field.type === 'textarea' || field.type === 'richtext' ? 'long text' : 'short text';
+  const displayLabel = displayFieldLabel(field);
 
   return (
     <div className="bg-white border border-gray-200 rounded-md p-2.5 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs font-semibold truncate">{field.label ?? field.name ?? '(untitled field)'}</p>
+          <p className="text-xs font-semibold truncate">{displayLabel}</p>
           {field.sectionHeading && (
             <p className="text-xs text-gray-600 mt-0.5 truncate" title={field.sectionHeading}>{field.sectionHeading}</p>
           )}
@@ -829,7 +878,7 @@ function FieldCard({ info }: { info: PanelItem }) {
           className="mt-2 w-full box-border text-sm text-gray-800 border border-gray-300 rounded px-2 py-1.5 leading-relaxed max-h-52 overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:bg-gray-50"
           rows={4}
           value={text}
-          aria-label={`Draft answer for ${field.label ?? 'field'}`}
+          aria-label={`Draft answer for ${displayLabel}`}
           aria-live={status === 'drafting' ? 'polite' : undefined}
           readOnly={!canReview}
           onFocus={() => setEditing(true)}

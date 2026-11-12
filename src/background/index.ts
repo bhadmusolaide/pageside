@@ -542,28 +542,28 @@ async function handleDisableSite(
 
 /* ------------------------- Streaming ------------------------- */
 
-const controllers = new Map<string, AbortController>();
-
 chrome.runtime.onConnect.addListener(port => {
   if (port.name !== 'sr_stream') return;
 
+  // Keep controllers scoped to this port so a side-panel reconnect or a frame
+  // teardown cannot abort an unrelated generation.
+  const portControllers = new Map<string, AbortController>();
+
   port.onDisconnect.addListener(() => {
-    for (const [requestId, controller] of controllers) {
-      if (!controller.signal.aborted) {
-        controller.abort();
-        controllers.delete(requestId);
-      }
+    for (const [requestId, controller] of portControllers) {
+      if (!controller.signal.aborted) controller.abort();
+      portControllers.delete(requestId);
     }
   });
 
   port.onMessage.addListener((message: StreamRequest) => {
     if (message.type === 'start') {
       const controller = new AbortController();
-      controllers.set(message.requestId, controller);
-      streamAnswer(port, message, controller).finally(() => controllers.delete(message.requestId));
+      portControllers.set(message.requestId, controller);
+      streamAnswer(port, message, controller).finally(() => portControllers.delete(message.requestId));
     } else if (message.type === 'stop') {
-      controllers.get(message.requestId)?.abort();
-      controllers.delete(message.requestId);
+      portControllers.get(message.requestId)?.abort();
+      portControllers.delete(message.requestId);
     }
   });
 });

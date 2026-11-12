@@ -189,6 +189,38 @@
   <p class="note">The extension should scan fields inside iframes when all_frames is enabled.</p>
 </section>
 
+<section>
+  <h2>9. Lever-Style Application Questions</h2>
+  <p class="note">The visible question is in a sibling container, not a <code>label[for]</code>. Field names use opaque <code>cards[...]</code> identifiers and must not be shown as the question.</p>
+
+  <div class="application-question">
+    <div class="application-label">
+      <div class="text">Why do you want to work at Acme?</div>
+    </div>
+    <div class="application-field">
+      <textarea name="cards[05e18342-20d1-4f6e-87f1-5329eb][field0]" rows="3" style="width:100%"></textarea>
+    </div>
+  </div>
+
+  <div class="application-question">
+    <div class="application-label">
+      <div class="text">Describe a project you are proud of.</div>
+    </div>
+    <div class="application-field">
+      <textarea name="cards[05e18342-20d1-4f6e-87f1-5329eb][field1]" rows="3" style="width:100%"></textarea>
+    </div>
+  </div>
+
+  <div class="application-question">
+    <div class="application-label">
+      <div class="text">What is your earliest start date?</div>
+    </div>
+    <div class="application-field">
+      <input type="text" name="cards[05e18342-20d1-4f6e-87f1-5329eb][field2]" style="width:100%">
+    </div>
+  </div>
+</section>
+
 <hr>
 
 <p><em>End of test page. Open the extension's side panel or use the "Scan Page" command to test field detection.</em></p>

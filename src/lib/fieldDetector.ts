@@ -117,55 +117,171 @@ function rootOf(el: Element): Document | ShadowRoot {
   return root instanceof ShadowRoot ? root : el.ownerDocument;
 }
 
+const FORM_CONTROL_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+const LABELISH_SELECTOR = [
+  'label',
+  'legend',
+  '[class*="application-label" i]',
+  '[class*="application-question" i]',
+  '[class*="question-label" i]',
+  '[class*="question-text" i]',
+  '[class*="field-label" i]',
+  '[class*="form-label" i]',
+  '[class*="input-label" i]',
+  '[class*="control-label" i]',
+  '[data-qa*="label" i]',
+  '[data-testid*="label" i]',
+].join(',');
+
+/**
+ * True when a string looks like a machine field name rather than a human
+ * question. Lever names custom questions like
+ * `cards[05e18342-20d1-4f6e-87f1-5329eb][field0]`; using that as the prompt
+ * makes the model invent an answer to nothing.
+ */
+export function isLikelyFieldIdentifier(value: string | null | undefined): boolean {
+  const text = (value ?? '').trim();
+  if (!text) return false;
+  if (/^(?:cards?|fields?|questions?|answers?)\s*\[/i.test(text)) return true;
+  if (/^(?:cards?|fields?|questions?|answers?|form|input|entry|control)[-_ ]?\d*(?:\[[^\]]*\])*$/i.test(text)) return true;
+  if (/^[a-z0-9_\-]+(?:\[[^\]]*\])+$/i.test(text)) return true;
+  if (/\b[0-9a-f]{8}[-_ ]?[0-9a-f]{4}[-_ ]?[0-9a-f]{4}[-_ ]?[0-9a-f]{4}[-_ ]?[0-9a-f]{12}\b/i.test(text)) return true;
+  if (/^[a-z0-9]+(?:[-_][a-z0-9]+)+$/i.test(text) && /\d{2,}/.test(text)) return true;
+  if (text.length > 80 && !/\s/.test(text) && /\d/.test(text)) return true;
+  return false;
+}
+
+function cleanLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const cleaned = value
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/[*:]+$/, '')
+    .trim();
+  if (!cleaned || cleaned.length > 300) return null;
+  if (isLikelyFieldIdentifier(cleaned)) return null;
+  return cleaned;
+}
+
+function isFormControl(el: Element): boolean {
+  return FORM_CONTROL_TAGS.has(el.tagName);
+}
+
+function containsFormControl(el: Element): boolean {
+  if (isFormControl(el)) return true;
+  return Boolean(el.querySelector('input, textarea, select, button, option'));
+}
+
+function textWithoutControls(el: Element): string {
+  const clone = el.cloneNode(true) as Element;
+  clone
+    .querySelectorAll('input, textarea, select, button, option, [contenteditable="true"], script, style, noscript')
+    .forEach(node => node.remove());
+  return clone.textContent ?? '';
+}
+
+function precedesInDocument(first: Element, second: Element): boolean {
+  return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
+/**
+ * Resolve a visible question from the surrounding markup. Application forms
+ * such as Lever render the question in a sibling container instead of a
+ * `<label for>`, so walk up a few ancestors and read the closest preceding
+ * label-like text before falling back to a container's own text.
+ */
+function resolveStructuralLabel(el: Element): string | null {
+  let node: Element | null = el;
+
+  for (let depth = 0; depth < 6 && node; depth++) {
+    let sibling = node.previousElementSibling;
+    while (sibling) {
+      if (!/^(BR|HR|SCRIPT|STYLE|NOSCRIPT)$/i.test(sibling.tagName) && !containsFormControl(sibling)) {
+        const text = cleanLabel(sibling.textContent);
+        if (text && text.length <= 200) return text;
+      }
+      sibling = sibling.previousElementSibling;
+    }
+
+    const parent: Element | null = node.parentElement;
+    if (!parent || /^(BODY|HTML)$/i.test(parent.tagName)) break;
+
+    const labelish = Array.from(parent.querySelectorAll(LABELISH_SELECTOR))
+      .filter(candidate =>
+        candidate !== el &&
+        !candidate.contains(el) &&
+        !containsFormControl(candidate) &&
+        precedesInDocument(candidate, el)
+      );
+    for (const candidate of labelish.reverse()) {
+      const text = cleanLabel(candidate.textContent);
+      if (text && text.length <= 200) return text;
+    }
+
+    // Only read a container's raw text when it wraps this field and no other
+    // interactive controls, so we never pull in an entire form or nav block.
+    if (parent.querySelectorAll('input, textarea, select, button').length <= 1) {
+      const text = cleanLabel(textWithoutControls(parent));
+      if (text && text.length <= 200) return text;
+    }
+
+    node = parent;
+  }
+
+  return null;
+}
+
 export function resolveLabel(el: Element): string | null {
   if (!(el instanceof HTMLElement)) return null;
 
-  const ariaLabel = el.getAttribute('aria-label');
+  const ariaLabel = cleanLabel(el.getAttribute('aria-label'));
   if (ariaLabel) return ariaLabel;
 
   const ariaLabelledby = el.getAttribute('aria-labelledby');
   if (ariaLabelledby) {
-    const ref = rootOf(el).getElementById(ariaLabelledby);
-    if (ref) return ref.textContent?.trim() ?? ariaLabelledby;
+    const refs = ariaLabelledby.split(/\s+/).filter(Boolean);
+    const text = refs
+      .map(id => rootOf(el).getElementById(id)?.textContent ?? '')
+      .join(' ');
+    const resolved = cleanLabel(text);
+    if (resolved) return resolved;
   }
 
-  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+  if (isFormControl(el)) {
     const id = el.getAttribute('id');
     if (id) {
       const labelFor = rootOf(el).querySelector(`label[for="${CSS.escape(id)}"]`);
-      if (labelFor) return labelFor.textContent?.trim() ?? null;
+      const resolved = cleanLabel(labelFor?.textContent);
+      if (resolved) return resolved;
     }
   }
 
   const parentLabel = el.closest('label');
-  if (parentLabel) return parentLabel.textContent?.trim() ?? null;
+  if (parentLabel) {
+    const resolved = cleanLabel(textWithoutControls(parentLabel));
+    if (resolved) return resolved;
+  }
 
-  const placeholder = el.getAttribute('placeholder');
+  const structural = resolveStructuralLabel(el);
+  if (structural) return structural;
+
+  const placeholder = cleanLabel(el.getAttribute('placeholder'));
   if (placeholder) return placeholder;
 
-  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+  if (isFormControl(el)) {
     const name = el.getAttribute('name');
-    if (name) return name.replace(/[-_]/g, ' ').trim();
-  }
-
-  const prev = el.previousElementSibling;
-  if (prev && prev.tagName !== 'BR') {
-    const text = prev.textContent?.trim();
-    if (text && text.length > 0 && text.length < 200) return text;
-  }
-
-  const parent = el.parentElement;
-  if (parent) {
-    const parentText = parent.textContent?.trim() ?? '';
-    const idx = parentText.indexOf(el.textContent ?? '');
-    if (idx > 0) {
-      const before = parentText.substring(0, idx).trim();
-      if (before.length > 0 && before.length < 200) return before;
+    if (name) {
+      const resolved = cleanLabel(name.replace(/[-_]/g, ' '));
+      if (resolved) return resolved;
     }
   }
 
   const legend = el.closest('fieldset')?.querySelector('legend');
-  if (legend) return legend.textContent?.trim() ?? null;
+  if (legend) {
+    const resolved = cleanLabel(legend.textContent);
+    if (resolved) return resolved;
+  }
 
   return null;
 }
@@ -196,9 +312,9 @@ export function resolveSectionHeading(el: Element): string | null {
 }
 
 export function classifyField(field: DetectedField): FieldCategory {
-  const label = (field.label ?? '').toLowerCase();
-  const placeholder = (field.placeholder ?? '').toLowerCase();
-  const name = (field.name ?? '').toLowerCase();
+  const label = isLikelyFieldIdentifier(field.label) ? '' : (field.label ?? '').toLowerCase();
+  const placeholder = isLikelyFieldIdentifier(field.placeholder) ? '' : (field.placeholder ?? '').toLowerCase();
+  const name = isLikelyFieldIdentifier(field.name) ? '' : (field.name ?? '').toLowerCase();
   const combined = `${label} ${placeholder} ${name}`;
 
   const looksFactual = FACTUAL_PATTERNS.some(p => p.test(combined));

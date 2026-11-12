@@ -1,6 +1,14 @@
-import type { DetectedField } from '../lib/fieldDetector';
+import { isLikelyFieldIdentifier, type DetectedField } from '../lib/fieldDetector';
 import { formatTokens, formatCost, type GenerationUsage } from '../lib/usage';
 import type { AnswerProvenance } from '../lib/messaging';
+
+function fieldDisplayLabel(field: DetectedField): string {
+  for (const candidate of [field.label, field.placeholder, field.sectionHeading]) {
+    const text = candidate?.trim();
+    if (text && !isLikelyFieldIdentifier(text)) return text;
+  }
+  return '(untitled field)';
+}
 
 const TOOLBAR_HTML = `
 <style>
@@ -656,7 +664,7 @@ export function showAnswerCard(
   cardDiv.style.top = Math.min(rect.top, window.innerHeight - 250) + 'px';
   if (rect.top < 100) cardDiv.style.top = (rect.bottom + 8) + 'px';
 
-  (shadow.getElementById('__sr-card-label') as HTMLElement).textContent = field.label ?? field.selector;
+  (shadow.getElementById('__sr-card-label') as HTMLElement).textContent = fieldDisplayLabel(field);
   const contextParts: string[] = [];
   if (field.sectionHeading) contextParts.push(field.sectionHeading);
   if (field.currentValue) contextParts.push(`Current: ${field.currentValue.substring(0, 80)}`);

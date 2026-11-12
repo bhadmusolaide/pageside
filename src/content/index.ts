@@ -1,4 +1,4 @@
-import { scanElement, extractPageContext, classifyField, type DetectedField } from '../lib/fieldDetector';
+import { scanElement, extractPageContext, classifyField, isLikelyFieldIdentifier, type DetectedField } from '../lib/fieldDetector';
 import { fillField, undoFill } from '../lib/filler';
 import {
   selectRelevantVaultItems,
@@ -353,7 +353,11 @@ function findElementBySelector(selector: string): HTMLElement | null {
 }
 
 function questionOf(field: DetectedField): string {
-  return field.label ?? field.selector ?? '';
+  for (const candidate of [field.label, field.placeholder]) {
+    const text = candidate?.trim();
+    if (text && !isLikelyFieldIdentifier(text)) return text;
+  }
+  return '';
 }
 
 /* ------------------------- Panel state & events ------------------------- */
@@ -944,6 +948,21 @@ async function answerField(field: DetectedField, opts: { silent?: boolean; force
     return;
   }
 
+  if (!question) {
+    const error = makeFieldError(
+      'unknown',
+      "Could not read this field's question. Use Read Selection on the question text, or add the question to your vault and rescan."
+    );
+    setPanelError(field.id, error);
+    emitAnswerError(field.id, error);
+    emitPanelUpdate();
+    if (!opts.silent) {
+      showAnswerCard(field, el, makeCallbacks(field, el, question, []));
+      updateAnswerCard(`Error: ${error.message}`, [], 'Error');
+    }
+    return;
+  }
+
   const gen = await buildGenerationContext(question, field.id);
   const ctx: CardContext = {
     field,
@@ -1364,12 +1383,19 @@ async function openDraftTriage(): Promise<void> {
 
   const items = [];
   for (const field of openEnded) {
-    const gen = await buildGenerationContext(questionOf(field), field.id);
+    const label = questionOf(field);
+    if (!label) continue;
+    const gen = await buildGenerationContext(label, field.id);
     items.push({
       id: field.id,
-      label: questionOf(field),
+      label,
       estimateTokens: estimateTokens(gen.systemPrompt) + estimateTokens(gen.basePrompt),
     });
+  }
+
+  if (items.length === 0) {
+    updateAnswerCard('Could not read any open-ended questions on this page. Try Read Selection on the question text.', [], 'Skipped');
+    return;
   }
 
   showTriageModal(items, ids => {

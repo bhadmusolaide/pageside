@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseStructuredJobPosting } from '../src/lib/fieldDetector.ts';
+import { parseStructuredJobPosting, isLikelyFieldIdentifier } from '../src/lib/fieldDetector.ts';
 
 test('extracts company, title, and description from JSON-LD @graph', () => {
   const scripts = [
@@ -36,4 +36,19 @@ test('returns null when no JobPosting is present', () => {
     JSON.stringify({ '@type': 'Organization', name: 'Remote Career' }),
   ]);
   assert.equal(result, null);
+});
+
+test('rejects Lever-style card field names as questions', () => {
+  assert.equal(isLikelyFieldIdentifier('cards[05e18342-20d1-4f6e-87f1-5329eb][field0]'), true);
+  assert.equal(isLikelyFieldIdentifier('cards[05e18342 20d1 4f6e 87f1 5329eb'), true);
+  assert.equal(isLikelyFieldIdentifier('field_0'), true);
+  assert.equal(isLikelyFieldIdentifier('question[abc123]'), true);
+  assert.equal(isLikelyFieldIdentifier('cards'), true);
+});
+
+test('keeps real question text as a label candidate', () => {
+  assert.equal(isLikelyFieldIdentifier('Why do you want to work here?'), false);
+  assert.equal(isLikelyFieldIdentifier('First name'), false);
+  assert.equal(isLikelyFieldIdentifier('Please describe your [relevant] experience.'), false);
+  assert.equal(isLikelyFieldIdentifier('linkedin_url'), false);
 });
