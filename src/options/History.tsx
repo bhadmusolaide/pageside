@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { HistoryAnswer } from '../lib/history';
+import { getUiLocale, subscribeLocale, t } from '../lib/i18n';
 
 const PAGE_SIZE = 20;
 
@@ -14,6 +15,7 @@ function downloadCsv(csv: string): void {
 }
 
 export function History() {
+  useSyncExternalStore(subscribeLocale, getUiLocale, getUiLocale);
   const [items, setItems] = useState<HistoryAnswer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +41,7 @@ export function History() {
         setItems([]);
       }
     } catch (e) {
-      setError((e as Error).message);
+      setError(t('history.loadError', { error: (e as Error).message }));
     } finally {
       setLoading(false);
     }
@@ -56,12 +58,12 @@ export function History() {
       const response = await chrome.runtime.sendMessage({ type: 'export_history_csv' });
       if (response?.type === 'history_csv' && response.count > 0) {
         downloadCsv(response.csv);
-        setNotice({ kind: 'success', message: `Exported ${response.count} answers.` });
+        setNotice({ kind: 'success', message: t('history.exportedAnswers', { count: response.count }) });
       } else {
-        setNotice({ kind: 'error', message: 'No history to export yet. Insert an answer first.' });
+        setNotice({ kind: 'error', message: t('history.noExportData') });
       }
     } catch (e) {
-      setNotice({ kind: 'error', message: `Export failed: ${(e as Error).message}` });
+      setNotice({ kind: 'error', message: t('history.exportError', { error: (e as Error).message }) });
     } finally {
       setExporting(false);
     }
@@ -73,7 +75,7 @@ export function History() {
       setCopiedId(item.id ?? null);
       window.setTimeout(() => setCopiedId(null), 1500);
     } catch {
-      setNotice({ kind: 'error', message: 'Could not copy to the clipboard.' });
+      setNotice({ kind: 'error', message: t('history.copyError') });
     }
   }
 
@@ -82,12 +84,12 @@ export function History() {
       const response = await chrome.runtime.sendMessage({ type: 'delete_history_answer', id });
       if (response?.type === 'history_deleted' && response.deleted) {
         setItems(prev => prev.filter(item => item.id !== id));
-        setNotice({ kind: 'success', message: 'Answer deleted from history.' });
+        setNotice({ kind: 'success', message: t('history.deleted') });
       } else {
-        setNotice({ kind: 'error', message: 'Could not delete that answer.' });
+        setNotice({ kind: 'error', message: t('history.deleteError') });
       }
     } catch (e) {
-      setNotice({ kind: 'error', message: `Delete failed: ${(e as Error).message}` });
+      setNotice({ kind: 'error', message: t('history.deleteFailed', { error: (e as Error).message }) });
     } finally {
       setConfirmDelete(null);
     }
@@ -143,38 +145,38 @@ export function History() {
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <input
           className="flex-1 min-w-48 border border-gray-400 rounded px-3 py-2 text-sm"
-          placeholder="Search saved answers..."
-          aria-label="Search saved answers"
+          placeholder={t('history.search')}
+          aria-label={t('history.search')}
           value={search}
           onChange={e => { setSearch(e.target.value); setPage(1); }}
         />
         <button className="px-3 py-2 text-sm rounded bg-white border border-gray-400 text-gray-700 hover:bg-gray-50" onClick={() => void load()}>
-          Refresh
+          {t('history.refresh')}
         </button>
         <button
           className={`px-3 py-2 text-sm rounded text-white ${exporting ? 'bg-green-400' : 'bg-green-600 hover:bg-green-700'}`}
           disabled={exporting || items.length === 0}
           onClick={() => void handleExport()}
         >
-          {exporting ? 'Exporting...' : 'Export CSV'}
+          {exporting ? t('history.exporting') : t('history.exportCsv')}
         </button>
       </div>
 
       <div className="flex flex-wrap items-end gap-3 mb-4 rounded border border-gray-200 bg-white px-3 py-2">
         <div>
-          <label htmlFor="sr-history-company" className="block text-xs font-medium text-gray-700 mb-1">Company</label>
+          <label htmlFor="sr-history-company" className="block text-xs font-medium text-gray-700 mb-1">{t('history.company')}</label>
           <select
             id="sr-history-company"
             className="border border-gray-400 rounded px-2 py-1.5 text-sm min-w-40"
             value={company}
             onChange={e => { setCompany(e.target.value); setPage(1); }}
           >
-            <option value="">All companies</option>
+            <option value="">{t('history.allCompanies')}</option>
             {companies.map(value => <option key={value} value={value}>{value}</option>)}
           </select>
         </div>
         <div>
-          <label htmlFor="sr-history-from" className="block text-xs font-medium text-gray-700 mb-1">From</label>
+          <label htmlFor="sr-history-from" className="block text-xs font-medium text-gray-700 mb-1">{t('history.from')}</label>
           <input
             id="sr-history-from"
             type="date"
@@ -184,7 +186,7 @@ export function History() {
           />
         </div>
         <div>
-          <label htmlFor="sr-history-to" className="block text-xs font-medium text-gray-700 mb-1">To</label>
+          <label htmlFor="sr-history-to" className="block text-xs font-medium text-gray-700 mb-1">{t('history.to')}</label>
           <input
             id="sr-history-to"
             type="date"
@@ -195,14 +197,16 @@ export function History() {
         </div>
         {hasFilters && (
           <button className="px-3 py-1.5 text-sm rounded bg-gray-100 text-gray-700 hover:bg-gray-200" onClick={clearFilters}>
-            Clear filters
+            {t('history.clearFilters')}
           </button>
         )}
       </div>
 
       <p className="text-xs text-gray-600 mb-3">
-        {filtered.length} of {items.length} saved {items.length === 1 ? 'answer' : 'answers'}.
-        Export includes company, question, answer, and date.
+        {t(filtered.length === 1 ? 'history.savedCountSingle' : 'history.savedCountPlural', {
+          filtered: filtered.length,
+          total: items.length,
+        })} {t('history.exportDetails')}
       </p>
 
       {notice && (
@@ -214,14 +218,14 @@ export function History() {
         </div>
       )}
 
-      {loading && <div className="text-center text-gray-600 py-8">Loading history...</div>}
+      {loading && <div className="text-center text-gray-600 py-8">{t('history.loading')}</div>}
       {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4" role="alert">{error}</div>}
 
       {!loading && !error && filtered.length === 0 && (
         <div className="text-center text-gray-600 py-8">
-          <p className="text-lg mb-2">{items.length === 0 ? 'No saved answers yet' : 'No matches'}</p>
+          <p className="text-lg mb-2">{t(items.length === 0 ? 'history.noAnswers' : 'history.noMatches')}</p>
           <p className="text-sm">
-            {items.length === 0 ? 'Answers you insert are saved here automatically.' : 'Try clearing the search or filters.'}
+            {t(items.length === 0 ? 'history.autoSaveHelp' : 'history.filterHelp')}
           </p>
         </div>
       )}
@@ -236,7 +240,7 @@ export function History() {
                 <div className="flex items-start justify-between gap-2 mb-1">
                   <p className="text-sm font-medium text-gray-900">{item.question}</p>
                   <span className="shrink-0 text-xs text-gray-600">
-                    {new Date(item.createdAt).toLocaleDateString()}
+                    {new Date(item.createdAt).toLocaleDateString(getUiLocale())}
                   </span>
                 </div>
                 {item.company && <p className="text-xs text-gray-600 mb-1">{item.company}</p>}
@@ -248,28 +252,28 @@ export function History() {
                     className="text-xs px-2.5 py-1.5 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
                     onClick={() => toggleExpanded(id)}
                   >
-                    {isExpanded ? 'Collapse' : 'Show full answer'}
+                    {t(isExpanded ? 'history.collapse' : 'history.showFullAnswer')}
                   </button>
                   <button
                     className="text-xs px-2.5 py-1.5 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
                     onClick={() => void handleCopy(item)}
                   >
-                    {copiedId === id ? 'Copied' : 'Copy'}
+                    {t(copiedId === id ? 'history.copied' : 'history.copy')}
                   </button>
                   {confirmDelete === id ? (
                     <>
-                      <span className="text-xs text-red-800">Delete this answer?</span>
+                      <span className="text-xs text-red-800">{t('history.deleteQuestion')}</span>
                       <button
                         className="text-xs px-2.5 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
                         onClick={() => void handleDelete(id)}
                       >
-                        Confirm delete
+                        {t('history.confirmDelete')}
                       </button>
                       <button
                         className="text-xs px-2.5 py-1.5 rounded bg-white border border-gray-400 text-gray-700 hover:bg-gray-100"
                         onClick={() => setConfirmDelete(null)}
                       >
-                        Cancel
+                        {t('history.cancel')}
                       </button>
                     </>
                   ) : (
@@ -277,7 +281,7 @@ export function History() {
                       className="text-xs px-2.5 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
                       onClick={() => setConfirmDelete(id)}
                     >
-                      Delete
+                      {t('history.delete')}
                     </button>
                   )}
                 </div>
@@ -294,15 +298,15 @@ export function History() {
             disabled={currentPage <= 1}
             onClick={() => setPage(currentPage - 1)}
           >
-            Previous
+            {t('history.previous')}
           </button>
-          <span className="text-xs text-gray-600">Page {currentPage} of {pageCount}</span>
+          <span className="text-xs text-gray-600">{t('history.page', { page: currentPage, total: pageCount })}</span>
           <button
             className="px-3 py-2 text-sm rounded bg-white border border-gray-400 text-gray-700 hover:bg-gray-50 disabled:opacity-40"
             disabled={currentPage >= pageCount}
             onClick={() => setPage(currentPage + 1)}
           >
-            Next
+            {t('history.next')}
           </button>
         </div>
       )}

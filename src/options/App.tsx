@@ -26,11 +26,15 @@ function tabFromHash(): Tab | null {
 }
 
 export function App() {
-  useSyncExternalStore(subscribeLocale, getUiLocale, getUiLocale);
+  const locale = useSyncExternalStore(subscribeLocale, getUiLocale, getUiLocale);
   const [activeTab, setActiveTab] = useState<Tab>('vault');
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
   const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
+
+  useEffect(() => {
+    document.title = t('options.documentTitle');
+  }, [locale]);
 
   useEffect(() => {
     const applyValue = (value: unknown) => {
@@ -105,7 +109,7 @@ export function App() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Pageside</h1>
-              <p className="text-sm text-gray-600 mt-1">Vault, Profiles, History & Settings</p>
+              <p className="text-sm text-gray-600 mt-1">{t('options.pageSubtitle')}</p>
             </div>
             <ThemeToggle />
           </div>
@@ -116,19 +120,19 @@ export function App() {
         <div className="border-b border-amber-300 bg-amber-50" role="alert">
           <div className="max-w-4xl mx-auto px-6 py-3 flex flex-wrap items-center gap-3">
             <p className="text-sm text-amber-900 flex-1">
-              You have unsaved settings. Leave without saving?
+              {t('options.unsavedPrompt')}
             </p>
             <button
               className="px-3 py-2 text-sm font-medium rounded bg-amber-700 text-white hover:bg-amber-800"
               onClick={discardSettingsAndSwitch}
             >
-              Discard and switch
+              {t('options.discardAndSwitch')}
             </button>
             <button
               className="px-3 py-2 text-sm font-medium rounded bg-white border border-gray-400 text-gray-800 hover:bg-gray-100"
               onClick={() => setPendingTab(null)}
             >
-              Stay
+              {t('options.stay')}
             </button>
           </div>
         </div>
@@ -137,7 +141,7 @@ export function App() {
       <nav
         className="max-w-4xl mx-auto px-6 mt-2 flex gap-1"
         role="tablist"
-        aria-label="Options sections"
+        aria-label={t('options.sections')}
       >
         {TABS.map((tab, index) => {
           const active = activeTab === tab.id;

@@ -221,6 +221,40 @@
   </div>
 </section>
 
+<section>
+  <h2>10. Dynamic Form / Recovered Draft Safety</h2>
+  <p class="note">Enable session recovery, draft an answer below, then change or move the field and rescan. A recovered draft must be marked stale and cannot be inserted until reviewed. Removing the field must never restore the answer into a different field.</p>
+  <div id="dynamic-question-root">
+    <div class="application-question" id="dynamic-question-card">
+      <div class="application-label" id="dynamic-question-label">Describe a customer problem you solved.</div>
+      <div class="application-field">
+        <textarea id="dynamic-answer" name="dynamic_answer" rows="3" style="width:100%"></textarea>
+      </div>
+    </div>
+  </div>
+  <div id="dynamic-move-target" class="field-group"></div>
+  <div class="field-group">
+    <button type="button" id="dynamic-change">Change question and current value</button>
+    <button type="button" id="dynamic-move">Move question container</button>
+    <button type="button" id="dynamic-remove">Remove question</button>
+  </div>
+</section>
+
+<script>
+  const dynamicCard = document.getElementById('dynamic-question-card');
+  const dynamicLabel = document.getElementById('dynamic-question-label');
+  const dynamicAnswer = document.getElementById('dynamic-answer');
+  document.getElementById('dynamic-change').addEventListener('click', () => {
+    dynamicLabel.textContent = 'What did you learn from a recent project?';
+    dynamicAnswer.value = 'A changed value to validate before insertion.';
+    dynamicAnswer.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  document.getElementById('dynamic-move').addEventListener('click', () => {
+    document.getElementById('dynamic-move-target').appendChild(dynamicCard);
+  });
+  document.getElementById('dynamic-remove').addEventListener('click', () => dynamicCard.remove());
+</script>
+
 <hr>
 
 <p><em>End of test page. Open the extension's side panel or use the "Scan Page" command to test field detection.</em></p>

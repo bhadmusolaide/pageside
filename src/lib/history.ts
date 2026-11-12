@@ -82,6 +82,11 @@ export async function deleteHistoryAnswer(id: number): Promise<boolean> {
   return true;
 }
 
+export async function clearHistory(): Promise<void> {
+  const db = await getDb();
+  await db.clear(STORE_NAME);
+}
+
 export async function findSimilarAnswers(
   question: string,
   minScore: number = 3,

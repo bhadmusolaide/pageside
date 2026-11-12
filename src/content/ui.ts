@@ -141,6 +141,9 @@ const CARD_HTML = `
   #__sr-card .actions button.danger { background: #ef4444; color: #fff; }
   #__sr-card .sources { font-size: 11px; color: #4b5563; margin-top: 4px; }
   #__sr-card .sources span { cursor: pointer; text-decoration: underline; }
+  #__sr-card .source-details { margin-top: 4px; }
+  #__sr-card .source-details blockquote { margin: 2px 0 0; padding-left: 6px; border-left: 2px solid #d1d5db; white-space: pre-wrap; }
+  :host([data-sr-dark]) #__sr-card .source-details blockquote {border-color: #4b5563; }
   #__sr-card .usage { font-size: 11px; color: #4b5563; margin-top: 2px; }
   #__sr-card .flags { margin-top: 4px; font-size: 11px; }
   #__sr-card .flags .flag {
@@ -710,7 +713,8 @@ export function updateAnswerCard(
   flags?: string[],
   streaming?: boolean,
   usage?: GenerationUsage,
-  source?: AnswerProvenance | null
+  source?: AnswerProvenance | null,
+  sourceDetails?: Array<{ id: number; title: string; type: string; excerpt?: string }>
 ): void {
   if (!activeCard) return;
   const answerEl = activeCard.root.getElementById('__sr-card-answer') as HTMLTextAreaElement | null;
@@ -746,6 +750,24 @@ export function updateAnswerCard(
 
   const sourcesEl = activeCard.root.getElementById('__sr-card-sources') as HTMLElement;
   sourcesEl.textContent = sources && sources.length > 0 ? 'Sources: ' + sources.join(', ') : '';
+  if (sourceDetails?.some(detail => detail.excerpt)) {
+    const details = document.createElement('details');
+    details.className = 'source-details';
+    const summary = document.createElement('summary');
+    summary.textContent = `View supporting passages (${sourceDetails.length})`;
+    details.appendChild(summary);
+    for (const sourceDetail of sourceDetails) {
+      if (!sourceDetail.excerpt) continue;
+      const wrapper = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = sourceDetail.title;
+      const excerpt = document.createElement('blockquote');
+      excerpt.textContent = sourceDetail.excerpt;
+      wrapper.append(title, excerpt);
+      details.appendChild(wrapper);
+    }
+    sourcesEl.appendChild(details);
+  }
 
   const usageEl = activeCard.root.getElementById('__sr-card-usage') as HTMLElement | null;
   if (usageEl) {

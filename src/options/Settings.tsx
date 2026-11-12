@@ -5,6 +5,13 @@ import { TONES, LANGUAGES, UI_LANGUAGES } from '../lib/options';
 import type { ModelOption } from '../lib/messaging';
 import { getUiLocale, subscribeLocale, t } from '../lib/i18n';
 import { getProviderConfig, isChatModel } from '../lib/provider';
+import { getAllItems, clearVault, updateItem } from '../lib/vault';
+import { getAllHistoryAnswers, clearHistory } from '../lib/history';
+import {
+  clearPageRecoveries,
+  RECOVERY_ENABLED_KEY,
+  RECOVERY_STORAGE_PREFIX,
+} from '../lib/recovery';
 
 interface SettingsData {
   apiKey: string;
@@ -32,9 +39,11 @@ const DEFAULTS: SettingsData = {
   historyContextLimit: 3,
 };
 
+const SETTINGS_STORAGE_KEYS = Object.keys(DEFAULTS);
+
 interface ProviderInfo {
   label: string;
-  keyHint: string;
+  keyHintKey: string;
   keyPlaceholder: string;
   modelPlaceholder: string;
 }
@@ -42,31 +51,31 @@ interface ProviderInfo {
 const PROVIDER_INFO: Record<string, ProviderInfo> = {
   openrouter: {
     label: 'OpenRouter',
-    keyHint: 'Get a key at https://openrouter.ai/keys. You can use any model listed there.',
+    keyHintKey: 'settings.keyHint.openrouter',
     keyPlaceholder: 'sk-or-v1-...',
     modelPlaceholder: 'anthropic/claude-sonnet-5.5',
   },
   anthropic: {
     label: 'Anthropic',
-    keyHint: 'Get a key at https://console.anthropic.com.',
+    keyHintKey: 'settings.keyHint.anthropic',
     keyPlaceholder: 'sk-ant-...',
     modelPlaceholder: 'claude-sonnet-5-5',
   },
   openai: {
     label: 'OpenAI',
-    keyHint: 'Get a key at https://platform.openai.com/api-keys.',
+    keyHintKey: 'settings.keyHint.openai',
     keyPlaceholder: 'sk-...',
     modelPlaceholder: 'gpt-4o-mini',
   },
   grok: {
     label: 'Grok (xAI)',
-    keyHint: 'Get a key at https://console.x.ai/.',
+    keyHintKey: 'settings.keyHint.grok',
     keyPlaceholder: 'xai-...',
     modelPlaceholder: 'grok-4',
   },
   groq: {
     label: 'Groq',
-    keyHint: 'Get a key at https://console.groq.com/keys.',
+    keyHintKey: 'settings.keyHint.groq',
     keyPlaceholder: 'gsk_...',
     modelPlaceholder: 'llama-3.3-70b-versatile',
   },
@@ -137,15 +146,15 @@ async function saveSettings(data: SettingsData): Promise<void> {
 async function fetchProviderModels(provider: string, apiKey: string): Promise<ModelOption[]> {
   const config = getProviderConfig(provider);
   if (config.modelsRequireKey && !apiKey.trim()) {
-    throw new Error(`Enter an API key to load ${config.label} models.`);
+    throw new Error(t('settings.apiKeyRequiredProvider', { provider: config.label }));
   }
   const response = await fetch(config.modelsUrl, {
     headers: config.buildModelsHeaders(apiKey),
   });
   if (!response.ok) {
     throw new Error(response.status === 401 || response.status === 403
-      ? `${config.label} rejected the API key.`
-      : `${config.label} returned ${response.status}.`);
+      ? t('settings.providerRejectedKey', { provider: config.label })
+      : t('settings.providerStatus', { provider: config.label, status: response.status }));
   }
   const body = await response.json() as {
     data?: Array<{ id?: string; name?: string; display_name?: string }>;
@@ -210,7 +219,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
           fetched = Array.isArray(response.models) ? response.models : [];
           loadError = response.error ?? null;
         } else {
-          loadError = 'The background worker did not return a model list.';
+          loadError = t('settings.modelListFailed');
         }
       } catch (e) {
         loadError = (e as Error).message;
@@ -223,7 +232,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
             fetched = direct;
             loadError = null;
           } else if (!loadError) {
-            loadError = 'The provider returned no models.';
+            loadError = t('settings.providerNoModels');
           }
         } catch (e) {
           loadError = loadError ?? (e as Error).message;
@@ -301,7 +310,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
       setSavedMessage(true);
       setTimeout(() => setSavedMessage(false), 2000);
     } catch (e) {
-      setSaveError(`Failed to save settings: ${(e as Error).message}`);
+      setSaveError(t('settings.failedSave', { error: (e as Error).message }));
     } finally {
       setSaving(false);
     }
@@ -309,11 +318,11 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
 
   async function handleTestApiKey() {
     if (!settings.apiKey.trim()) {
-      setApiTestResult({ success: false, message: 'Enter an API key first.' });
+      setApiTestResult({ success: false, message: t('settings.enterKeyFirst') });
       return;
     }
     if (!settings.model.trim()) {
-      setApiTestResult({ success: false, message: 'Enter a model first.' });
+      setApiTestResult({ success: false, message: t('settings.enterModelFirst') });
       return;
     }
     setApiTesting(true);
@@ -368,7 +377,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
             value={settings.uiLanguage}
             onChange={e => update('uiLanguage', e.target.value)}
           >
-            {UI_LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+            {UI_LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.value === 'es' ? 'Español' : 'English'}</option>)}
           </select>
           <p className="text-xs text-gray-600 mt-1">{t('settings.uiLanguageHelp')}</p>
         </div>
@@ -389,7 +398,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
             ))}
           </select>
           <p className="text-xs text-gray-600 mt-1">
-            {(PROVIDER_INFO[settings.provider] ?? PROVIDER_INFO.openrouter).keyHint}
+            {t((PROVIDER_INFO[settings.provider] ?? PROVIDER_INFO.openrouter).keyHintKey)}
           </p>
         </div>
 
@@ -496,7 +505,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
           <p className="text-xs text-gray-600 mt-1">{t('settings.modelHelp')}</p>
           {modelsLoading && <p className="text-xs text-gray-600 mt-1" role="status">{t('settings.modelsLoading')}</p>}
           {!modelsLoading && modelOptions.length > 0 && (
-            <p className="text-xs text-gray-600 mt-1">{t('settings.modelsCount').replace('{count}', String(modelOptions.length))}</p>
+            <p className="text-xs text-gray-600 mt-1">{t('settings.modelsCount', { count: modelOptions.length })}</p>
           )}
           {!modelsLoading && modelsError && <p className="text-xs text-amber-800 mt-1">{modelsError}</p>}
         </div>
@@ -508,7 +517,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
             value={settings.tone}
             onChange={e => update('tone', e.target.value)}
           >
-            {TONES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            {TONES.map(tone => <option key={tone.value} value={tone.value}>{t(`tone.${tone.value}`)}</option>)}
           </select>
         </div>
 
@@ -532,7 +541,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
               value={settings.language}
               onChange={e => update('language', e.target.value)}
             >
-              {LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+              {LANGUAGES.map(language => <option key={language.value} value={language.value}>{t(`language.${language.value}`)}</option>)}
             </select>
           </div>
         </div>
@@ -544,12 +553,12 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
             value={settings.retrievalMode}
             onChange={e => update('retrievalMode', e.target.value as RetrievalMode)}
           >
-            <option value="keyword">Keyword scoring (fast, default)</option>
-            <option value="tfidf">TF-IDF similarity</option>
-            <option value="embeddings">Local embeddings (experimental)</option>
+            <option value="keyword">{t('settings.keywordRetrieval')}</option>
+            <option value="tfidf">{t('settings.tfidfRetrieval')}</option>
+            <option value="embeddings">{t('settings.embeddingRetrieval')}</option>
           </select>
           <p className="text-xs text-gray-600 mt-1">
-            All retrieval runs locally. Embeddings use a dependency-free hashed vector model; no network calls or model downloads.
+            {t('settings.retrievalHelp')}
           </p>
         </div>
 
@@ -567,7 +576,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
               onChange={e => update('vaultContextBudget', parseInt(e.target.value) || 0)}
               onBlur={() => update('vaultContextBudget', clampContextBudget(settings.vaultContextBudget))}
             />
-            <p className="text-xs text-gray-600 mt-1">1,000 to 12,000. Defaults to 6,000. Lower means less cost and faster requests.</p>
+            <p className="text-xs text-gray-600 mt-1">{t('settings.contextBudgetHelp')}</p>
           </div>
           <div className="flex-1">
             <label htmlFor="sr-history-limit" className="block text-sm font-medium text-gray-700 mb-1">{t('settings.historyLimit')}</label>
@@ -582,7 +591,7 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
               onChange={e => update('historyContextLimit', parseInt(e.target.value) || 0)}
               onBlur={() => update('historyContextLimit', clampHistoryLimit(settings.historyContextLimit))}
             />
-            <p className="text-xs text-gray-600 mt-1">0 to 10. Defaults to 3, capped by a 1,200-token history budget.</p>
+            <p className="text-xs text-gray-600 mt-1">{t('settings.historyLimitHelp')}</p>
           </div>
         </div>
       </div>
@@ -610,7 +619,197 @@ export function Settings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
           {apiTestResult.message}
         </div>
       )}
+
+      <LocalDataControls
+        settingsDirty={dirty}
+        onSettingsCleared={() => {
+          setSettings(DEFAULTS);
+          setDirty(false);
+          setSavedMessage(false);
+          setSaveError(null);
+          onDirtyChange?.(false);
+        }}
+      />
     </div>
+  );
+}
+
+type DataCategory = 'vault' | 'history' | 'sessions' | 'settings' | 'profiles';
+
+function LocalDataControls({
+  settingsDirty,
+  onSettingsCleared,
+}: {
+  settingsDirty: boolean;
+  onSettingsCleared: () => void;
+}) {
+  const [counts, setCounts] = useState({ vault: 0, history: 0, sessions: 0, settings: 0, profiles: 0 });
+  const [recoveryEnabled, setRecoveryEnabled] = useState(false);
+  const [pending, setPending] = useState<DataCategory | null>(null);
+  const [working, setWorking] = useState(false);
+  const [notice, setNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+
+  async function refreshCounts(): Promise<void> {
+    try {
+      const [vault, history, storage] = await Promise.all([
+        getAllItems(),
+        getAllHistoryAnswers(),
+        chrome.storage.local.get(),
+      ]);
+      const settingKeys = new Set(SETTINGS_STORAGE_KEYS);
+      const siteProfiles = Array.isArray(storage['sr-profiles']) ? storage['sr-profiles'] as unknown[] : [];
+      const vaultProfiles = Array.isArray(storage['sr-vault-profiles']) ? storage['sr-vault-profiles'] as Array<{ id?: string }> : [];
+      const profileOverrides = storage['sr-vault-profile-overrides'] &&
+        typeof storage['sr-vault-profile-overrides'] === 'object'
+        ? Object.keys(storage['sr-vault-profile-overrides'] as Record<string, unknown>)
+        : [];
+      setCounts({
+        vault: vault.length,
+        history: history.length,
+        sessions: Object.keys(storage).filter(key => key.startsWith(RECOVERY_STORAGE_PREFIX)).length,
+        settings: Object.keys(storage).filter(key => settingKeys.has(key)).length,
+        profiles: siteProfiles.length +
+          vaultProfiles.filter(profile => profile.id !== 'default').length +
+          profileOverrides.length,
+      });
+      setRecoveryEnabled(storage[RECOVERY_ENABLED_KEY] === true);
+    } catch (error) {
+      setNotice({ kind: 'error', message: t('settings.inspectDataError', { error: (error as Error).message }) });
+    }
+  }
+
+  useEffect(() => {
+    void refreshCounts();
+  }, []);
+
+  async function clearSelectedData(): Promise<void> {
+    if (!pending) return;
+    const category = pending;
+    if (category === 'settings' && settingsDirty) {
+      setPending(null);
+      setNotice({ kind: 'error', message: t('settings.clearUnsaved') });
+      return;
+    }
+    setWorking(true);
+    setNotice(null);
+    try {
+      if (category === 'vault') await clearVault();
+      if (category === 'history') await clearHistory();
+      if (category === 'sessions') {
+        await chrome.storage.local.set({ [RECOVERY_ENABLED_KEY]: false });
+        await clearPageRecoveries();
+      }
+      if (category === 'settings') {
+        await chrome.storage.local.remove(SETTINGS_STORAGE_KEYS);
+        onSettingsCleared();
+      }
+      if (category === 'profiles') {
+        const items = await getAllItems();
+        for (const item of items) {
+          if ((item.vaultProfileId ?? 'default') !== 'default') {
+            await updateItem({ ...item, vaultProfileId: 'default' });
+          }
+        }
+        await chrome.storage.local.remove([
+          'sr-profiles',
+          'sr-vault-profiles',
+          'sr-active-vault-profile',
+          'sr-vault-profile-overrides',
+        ]);
+      }
+      const messageKeys: Record<DataCategory, string> = {
+        vault: 'settings.clearVaultSuccess',
+        history: 'settings.clearHistorySuccess',
+        sessions: 'settings.clearSessionsSuccess',
+        settings: 'settings.clearSettingsSuccess',
+        profiles: 'settings.clearProfilesSuccess',
+      };
+      setNotice({ kind: 'success', message: t(messageKeys[category]) });
+      setPending(null);
+      await refreshCounts();
+    } catch (error) {
+      setNotice({ kind: 'error', message: t('settings.clearDataError', { error: (error as Error).message }) });
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const actions: Array<{
+    category: DataCategory;
+    titleKey: string;
+    detailKey: string;
+    count: number;
+    disabled: boolean;
+  }> = [
+    { category: 'vault', titleKey: 'settings.clearVaultTitle', detailKey: 'settings.resumeNotesPortfolioTone', count: counts.vault, disabled: counts.vault === 0 },
+    { category: 'history', titleKey: 'settings.clearHistoryTitle', detailKey: 'settings.acceptedAnswers', count: counts.history, disabled: counts.history === 0 },
+    { category: 'sessions', titleKey: 'settings.clearSessionsTitle', detailKey: 'settings.savedDraftsAndChat', count: counts.sessions, disabled: counts.sessions === 0 && !recoveryEnabled },
+    { category: 'settings', titleKey: 'settings.clearSettingsTitle', detailKey: 'settings.providerDataDetail', count: counts.settings, disabled: counts.settings === 0 || settingsDirty },
+    { category: 'profiles', titleKey: 'settings.clearProfilesTitle', detailKey: 'settings.profileDataDetail', count: counts.profiles, disabled: counts.profiles === 0 },
+  ];
+
+  return (
+    <section className="mt-10 border-t border-gray-300 pt-6" aria-labelledby="sr-local-data-title">
+      <h3 id="sr-local-data-title" className="text-lg font-semibold text-gray-900">{t('settings.localDataTitle')}</h3>
+      <p className="mt-1 text-sm text-gray-700">
+        {t('settings.localDataDescription')}
+      </p>
+      <div className="mt-4 space-y-2">
+        {actions.map(action => (
+          <div key={action.category} className="flex flex-wrap items-center gap-3 rounded border border-gray-200 bg-white p-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-gray-900">
+                {t(action.titleKey)} <span className="text-xs font-normal text-gray-600">({t(action.category === 'sessions' ? 'settings.pageCount' : action.category === 'vault' ? 'settings.itemCount' : action.category === 'history' ? 'settings.answerCount' : 'settings.storedKeyCount', { count: action.count })})</span>
+              </p>
+              <p className="mt-0.5 text-xs text-gray-600">
+                {action.category === 'sessions' ? `${t(recoveryEnabled ? 'settings.recoveryEnabled' : 'settings.recoveryDisabled')} ${t(action.detailKey)}` : t(action.detailKey)}
+              </p>
+              {action.category === 'settings' && settingsDirty && (
+                <p className="mt-0.5 text-xs text-amber-800">{t('settings.clearUnsaved')}</p>
+              )}
+            </div>
+            <button
+              type="button"
+              className="px-3 py-2 min-h-[40px] text-sm rounded border border-red-300 bg-red-50 text-red-800 hover:bg-red-100 disabled:opacity-50"
+              disabled={working || action.disabled}
+              onClick={() => { setNotice(null); setPending(action.category); }}
+            >
+              {t('settings.clear')}
+            </button>
+          </div>
+        ))}
+      </div>
+      {pending && (
+        <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3" role="alert">
+          <p className="text-sm text-amber-900">
+            {t('settings.clearCategory', { category: t(actions.find(action => action.category === pending)?.titleKey ?? '') })}
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              className="px-3 py-2 min-h-[40px] text-sm rounded bg-red-700 text-white hover:bg-red-800 disabled:opacity-50"
+              disabled={working || (pending === 'settings' && settingsDirty)}
+              onClick={() => void clearSelectedData()}
+            >
+              {working ? t('settings.clearing') : t('settings.clearPermanently')}
+            </button>
+            <button
+              type="button"
+              className="px-3 py-2 min-h-[40px] text-sm rounded border border-gray-400 bg-white text-gray-800 hover:bg-gray-100"
+              disabled={working}
+              onClick={() => setPending(null)}
+            >
+              {t('settings.cancel')}
+            </button>
+          </div>
+        </div>
+      )}
+      {notice && (
+        <p className={`mt-3 rounded border px-3 py-2 text-sm ${notice.kind === 'error' ? 'border-red-300 bg-red-50 text-red-800' : 'border-green-300 bg-green-50 text-green-800'}`} role={notice.kind === 'error' ? 'alert' : 'status'}>
+          {notice.message}
+        </p>
+      )}
+    </section>
   );
 }
 

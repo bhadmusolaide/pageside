@@ -13,6 +13,16 @@ import { formatTokens, formatCost } from '../lib/usage';
 import { isLikelyFieldIdentifier, type PageContext } from '../lib/fieldDetector';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { getUiLocale, subscribeLocale, t } from '../lib/i18n';
+import {
+  clearPageRecoveries,
+  fingerprintFieldValue,
+  getPageRecovery,
+  isRecoveredDraftStale,
+  pageRecoveryStorageKey,
+  RECOVERY_ENABLED_KEY,
+  savePageDrafts,
+  type RecoveredDraft,
+} from '../lib/recovery';
 import { Chat } from './Chat';
 
 interface PanelItem extends PanelFieldInfo {
@@ -179,6 +189,10 @@ export function App() {
   useSyncExternalStore(subscribeLocale, getUiLocale, getUiLocale);
   const [view, setView] = useState<'questions' | 'chat'>('questions');
   const [questions, setQuestions] = useState<PanelItem[]>([]);
+  const [recoveryEnabled, setRecoveryEnabled] = useState(false);
+  const [recoveryReady, setRecoveryReady] = useState(false);
+  const [recoveryPageUrl, setRecoveryPageUrl] = useState('');
+  const [recoveryReadyPageKey, setRecoveryReadyPageKey] = useState('');
   const [notice, setNotice] = useState<string>('');
   const [needsEnable, setNeedsEnable] = useState(false);
   const [siteResponded, setSiteResponded] = useState(false);
@@ -223,6 +237,7 @@ export function App() {
     await updateActiveTabId();
     tabIdRef.current = tab.id;
     originRef.current = siteOriginPattern(tab);
+    setRecoveryPageUrl(tab.url ?? '');
 
     const frameIds = await frameIdsFor(tab.id);
     const results = await Promise.all(frameIds.map(async frameId => ({
@@ -231,6 +246,7 @@ export function App() {
     })));
 
     const merged: PanelItem[] = [];
+    let recoveryFailed = false;
     let responded = false;
     let profileMeta: {
       id?: string;
@@ -261,6 +277,68 @@ export function App() {
     }
 
     merged.sort((a, b) => a.frameId - b.frameId);
+    const recoveryKey = tab.url ? pageRecoveryStorageKey(tab.url) : '';
+    if (recoveryReady && recoveryEnabled && tab.url) {
+      try {
+        const saved = await getPageRecovery(tab.url);
+        const savedDrafts = new Map((saved?.drafts ?? []).map(draft => [
+          itemKey(draft.frameId, draft.fieldId),
+          draft,
+        ]));
+        const unmatchedSavedDrafts = (saved?.drafts ?? []).slice();
+        for (let index = 0; index < merged.length; index++) {
+          const item = merged[index];
+          const exactKey = itemKey(item.frameId, item.field.id);
+          let savedDraft = savedDrafts.get(exactKey);
+          let identityChanged = false;
+          if (!savedDraft) {
+            const selectorMatches = unmatchedSavedDrafts.filter(draft =>
+              draft.frameId === item.frameId && draft.selector === item.field.selector
+            );
+            if (selectorMatches.length === 1) {
+              savedDraft = selectorMatches[0];
+              identityChanged = true;
+            }
+          }
+          if (!savedDraft || item.draft || item.status !== 'none') continue;
+          const savedIndex = unmatchedSavedDrafts.indexOf(savedDraft);
+          if (savedIndex >= 0) unmatchedSavedDrafts.splice(savedIndex, 1);
+          const stale = identityChanged || isRecoveredDraftStale(savedDraft, item.field);
+          const restored: PanelItem = {
+            ...item,
+            status: 'draft',
+            source: savedDraft.source,
+            draft: savedDraft.draft,
+            sources: savedDraft.sources,
+            sourceDetails: savedDraft.sourceDetails ?? [],
+            flags: savedDraft.flags,
+            approved: false,
+            error: null,
+            usage: savedDraft.usage,
+            recovered: true,
+            stale,
+            recoveryValueFingerprint: savedDraft.valueFingerprint,
+          };
+          merged[index] = restored;
+          void sendToFrame(item.frameId, {
+            type: 'restore_field_draft',
+            fieldId: item.field.id,
+            draft: restored.draft,
+            source: restored.source,
+            sources: restored.sources,
+            flags: restored.flags,
+            usage: restored.usage,
+            stale: restored.stale,
+            valueFingerprint: savedDraft.valueFingerprint,
+            sourceDetails: restored.sourceDetails,
+          });
+        }
+      } catch (error) {
+        console.warn('[Pageside] Could not restore this page session:', error);
+        recoveryFailed = true;
+      }
+    }
+    setRecoveryReadyPageKey(recoveryReady && recoveryEnabled ? recoveryKey : '');
     setQuestions(merged);
     setChatPageContext(pageContext ?? undefined);
 
@@ -296,7 +374,7 @@ export function App() {
 
     setNeedsEnable(!responded);
     setSiteResponded(responded);
-    setNotice('');
+    setNotice(recoveryFailed ? 'Could not restore saved drafts. Check extension storage and try again.' : '');
     setConfirmBulk(false);
     if (profileMeta) {
       setVaultProfileId(profileMeta.id ?? 'default');
@@ -305,7 +383,7 @@ export function App() {
       setMatchedProfileName(profileMeta.matchedProfileName ?? null);
     }
     return responded;
-  }, []);
+  }, [recoveryEnabled, recoveryReady]);
 
   const refreshUntilReady = async (attempts = 16): Promise<boolean> => {
     for (let attempt = 0; attempt < attempts; attempt++) {
@@ -315,6 +393,61 @@ export function App() {
     }
     return false;
   };
+
+  useEffect(() => {
+    void chrome.storage.local.get({ [RECOVERY_ENABLED_KEY]: false })
+      .then(settings => setRecoveryEnabled(settings[RECOVERY_ENABLED_KEY] === true))
+      .catch(error => {
+        console.warn('[Pageside] Could not load recovery preference:', error);
+        setNotice('Could not load the session-recovery setting.');
+      })
+      .finally(() => setRecoveryReady(true));
+  }, []);
+
+  useEffect(() => {
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== 'local') return;
+      if (changes[RECOVERY_ENABLED_KEY]) {
+        const enabled = changes[RECOVERY_ENABLED_KEY].newValue === true;
+        setRecoveryEnabled(enabled);
+        if (!enabled) setRecoveryReadyPageKey('');
+      }
+      if (changes.apiKey) void checkHealth();
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  }, [checkHealth]);
+
+  useEffect(() => {
+    if (!recoveryReady || !recoveryEnabled || !recoveryPageUrl || questions.length === 0) return;
+    const recoveryKey = pageRecoveryStorageKey(recoveryPageUrl);
+    if (recoveryReadyPageKey !== recoveryKey) return;
+    if (questions.some(item => item.stale && item.recovered)) return;
+    const timer = window.setTimeout(() => {
+      const drafts: RecoveredDraft[] = questions
+        .filter(item => item.draft && item.status === 'draft')
+        .map(item => ({
+          frameId: item.frameId,
+          fieldId: item.field.id,
+          fieldType: item.field.type,
+          label: item.field.label ?? item.field.placeholder ?? '',
+          selector: item.field.selector,
+          valueFingerprint: fingerprintFieldValue(item.field.currentValue),
+          draft: item.draft,
+          source: item.source,
+          sources: item.sources,
+          sourceDetails: item.sourceDetails,
+          flags: item.flags,
+          usage: item.usage,
+          updatedAt: Date.now(),
+        }));
+      void savePageDrafts(recoveryPageUrl, drafts).catch(error => {
+        console.warn('[Pageside] Could not save page drafts:', error);
+        setNotice('Could not save this session. Check available extension storage.');
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [questions, recoveryEnabled, recoveryPageUrl, recoveryReady, recoveryReadyPageKey]);
 
   useEffect(() => {
     void refresh();
@@ -337,7 +470,23 @@ export function App() {
       chrome.runtime.onMessage.removeListener(listener);
       chrome.tabs.onActivated.removeListener(onActivated);
     };
-  }, [refresh, checkHealth]);
+  }, [refresh, checkHealth, recoveryReady]);
+
+  async function toggleRecovery(enabled: boolean): Promise<void> {
+    try {
+      await chrome.storage.local.set({ [RECOVERY_ENABLED_KEY]: enabled });
+      setRecoveryEnabled(enabled);
+      if (!enabled) {
+        await clearPageRecoveries();
+        setRecoveryReadyPageKey('');
+      } else {
+        await refresh();
+      }
+    } catch (error) {
+      console.warn('[Pageside] Could not update session recovery:', error);
+      setNotice('Could not update session recovery. Check extension storage and try again.');
+    }
+  }
 
   function addUsage(usage?: GenerationUsage): void {
     if (!usage) return;
@@ -380,6 +529,7 @@ export function App() {
           source: msg.source,
           draft: msg.answer,
           sources: msg.sources,
+          sourceDetails: msg.sourceDetails,
           flags: msg.flags,
           approved: false,
           error: null,
@@ -575,6 +725,19 @@ export function App() {
           </button>
         </div>
         <p className="text-xs text-gray-600" aria-live="polite">{t('panel.detected')}{questions.length > 0 ? ` · ${questions.length}` : ''}</p>
+        <label className="mt-1 flex items-start gap-2 text-xs text-gray-700">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 rounded border-gray-400 text-blue-600 focus:ring-blue-500"
+            checked={recoveryEnabled}
+            disabled={!recoveryReady}
+            onChange={event => void toggleRecovery(event.target.checked)}
+          />
+          <span>
+            Save drafts and chat on this device
+            <span className="block text-gray-600">Stored locally. Turning this off clears saved sessions.</span>
+          </span>
+        </label>
         {(sessionUsage.inputTokens > 0 || sessionUsage.outputTokens > 0) && (
           <p className="text-xs text-gray-600 mt-0.5" aria-live="polite">
             {t('panel.session')}: {sessionUsage.estimated ? '~' : ''}{formatTokens(sessionUsage.inputTokens)} in · {formatTokens(sessionUsage.outputTokens)} out
@@ -754,6 +917,8 @@ export function App() {
         <Chat
           vaultProfileId={siteResponded ? vaultProfileId : undefined}
           pageContext={chatPageContext}
+          pageUrl={recoveryPageUrl}
+          recoveryEnabled={recoveryEnabled}
           onUsage={addUsage}
           active={view === 'chat'}
         />
@@ -800,7 +965,7 @@ function SetupStep({
 }
 
 function FieldCard({ info }: { info: PanelItem }) {
-  const { field, status, source, draft, frameId, approved, error, usage, sources, flags } = info;
+  const { field, status, source, draft, frameId, approved, error, usage, sources, sourceDetails, flags, recovered, stale } = info;
   const [text, setText] = useState(draft);
   const [editing, setEditing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
@@ -870,6 +1035,22 @@ function FieldCard({ info }: { info: PanelItem }) {
               {t(SOURCE_KEY[source])}
             </span>
           )}
+          {recovered && (
+            <p className="mt-1 text-xs text-gray-600">Recovered from this device</p>
+          )}
+          {stale && (
+            <div className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-2" role="alert">
+              <p className="text-xs text-amber-900">
+                This field or its value changed since the draft was saved. Review the current question and value before using this draft.
+              </p>
+              <button
+                className="mt-1.5 px-2.5 py-1.5 min-h-[36px] text-xs font-medium rounded bg-white border border-amber-500 text-amber-900 hover:bg-amber-100"
+                onClick={() => void sendToFrame(frameId, { type: 'review_recovered_field', fieldId: field.id })}
+              >
+                I reviewed this field
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -898,6 +1079,21 @@ function FieldCard({ info }: { info: PanelItem }) {
 
       {sources.length > 0 && (
         <p className="mt-1 text-xs text-gray-600 truncate" title={sources.join(', ')}>Sources: {sources.join(', ')}</p>
+      )}
+      {sourceDetails.length > 0 && (
+        <details className="mt-1 rounded bg-gray-50 px-2 py-1.5 text-xs text-gray-700">
+          <summary className="cursor-pointer font-medium">View supporting passages ({sourceDetails.length})</summary>
+          <div className="mt-1 space-y-2">
+            {sourceDetails.map(sourceDetail => (
+              <div key={`${sourceDetail.id}:${sourceDetail.title}`}>
+                <p className="font-medium">{sourceDetail.title}</p>
+                <blockquote className="mt-0.5 border-l-2 border-gray-300 pl-2 whitespace-pre-wrap">
+                  {sourceDetail.excerpt || 'No excerpt available for this source.'}
+                </blockquote>
+              </div>
+            ))}
+          </div>
+        </details>
       )}
 
       <button
@@ -948,6 +1144,7 @@ function FieldCard({ info }: { info: PanelItem }) {
             type="checkbox"
             className="h-4 w-4 rounded border-gray-400 text-blue-600 focus:ring-blue-500"
             checked={approved}
+            disabled={stale}
             onChange={e => void sendToFrame(frameId, {
               type: 'set_field_approved',
               fieldId: field.id,

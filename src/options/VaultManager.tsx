@@ -1,6 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { VaultItem } from '../lib/vault';
-import { getAllItems, addItem, updateItem, deleteItem, exportVault, importVault } from '../lib/vault';
+import { getAllItems, addItem, updateItem, deleteItem, exportVault, importVault, isVaultExport } from '../lib/vault';
+import {
+  decryptVaultBackup,
+  encryptVaultBackup,
+  EncryptedBackupError,
+  isEncryptedVaultBackup,
+  MAX_BACKUP_FILE_BYTES,
+  type EncryptedVaultBackup,
+} from '../lib/encryptedBackup';
 import { extractTextFromFile } from '../lib/documentImport';
 import {
   getVaultProfiles,
@@ -12,14 +20,19 @@ import {
   defaultVaultProfile,
   type VaultProfile,
 } from '../lib/vaultProfile';
+import { getUiLocale, subscribeLocale, t } from '../lib/i18n';
 
 const ITEM_TYPES = ['resume', 'portfolio', 'note', 'tone_sample'] as const;
-const TYPE_LABELS: Record<string, string> = {
-  resume: 'Resume',
-  portfolio: 'Portfolio',
-  note: 'Notes',
-  tone_sample: 'Tone Samples',
+const TYPE_LABEL_KEYS: Record<string, string> = {
+  resume: 'vault.resume',
+  portfolio: 'vault.portfolio',
+  note: 'vault.notes',
+  tone_sample: 'vault.toneSamples',
 };
+
+type BackupDialogState =
+  | { mode: 'export' }
+  | { mode: 'import'; backup: EncryptedVaultBackup; fileName: string };
 
 function VaultForm({ item, onSave, onCancel }: {
   item: Partial<VaultItem> | null;
@@ -93,7 +106,7 @@ function VaultForm({ item, onSave, onCancel }: {
           setFormTitle(file.name.replace(/\.[^.]+$/, ''));
         }
       } catch (e) {
-        setSaveError(`Could not read ${file.name}: ${(e as Error).message}`);
+        setSaveError(t('vault.fileReadError', { file: file.name, error: (e as Error).message }));
       } finally {
         setImporting(false);
       }
@@ -113,7 +126,7 @@ function VaultForm({ item, onSave, onCancel }: {
         tags: formTags.split(',').map(t => t.trim()).filter(Boolean),
       });
     } catch (e) {
-      setSaveError((e as Error).message);
+      setSaveError(t('vault.saveError', { error: (e as Error).message }));
     } finally {
       setSaving(false);
     }
@@ -131,28 +144,28 @@ function VaultForm({ item, onSave, onCancel }: {
         aria-modal="true"
         aria-labelledby="sr-vault-form-title"
       >
-        <h2 id="sr-vault-form-title" className="text-lg font-semibold mb-4">{isEditing ? 'Edit Item' : 'Add Item'}</h2>
+        <h2 id="sr-vault-form-title" className="text-lg font-semibold mb-4">{t(isEditing ? 'vault.editItem' : 'vault.addItem')}</h2>
 
         {saveError && <div className="bg-red-100 border border-red-400 text-red-800 px-4 py-2 rounded mb-4" role="alert">{saveError}</div>}
 
         <div className="mb-3">
-          <label htmlFor="sr-vault-type" className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+          <label htmlFor="sr-vault-type" className="block text-sm font-medium text-gray-700 mb-1">{t('vault.type')}</label>
           <select
             id="sr-vault-type"
             className="w-full border border-gray-400 rounded px-3 py-2 text-sm"
             value={formType}
             onChange={e => setFormType(e.target.value as VaultItem['type'])}
           >
-            {ITEM_TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
+            {ITEM_TYPES.map(type => <option key={type} value={type}>{t(TYPE_LABEL_KEYS[type])}</option>)}
           </select>
         </div>
 
         <div className="mb-3">
-          <label htmlFor="sr-vault-title" className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+          <label htmlFor="sr-vault-title" className="block text-sm font-medium text-gray-700 mb-1">{t('vault.title')}</label>
           <input
             id="sr-vault-title"
             className="w-full border border-gray-400 rounded px-3 py-2 text-sm"
-            placeholder="e.g. Senior Engineer Resume"
+            placeholder={t('vault.resumeTitlePlaceholder')}
             value={formTitle}
             onChange={e => setFormTitle(e.target.value)}
           />
@@ -160,45 +173,196 @@ function VaultForm({ item, onSave, onCancel }: {
 
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1">
-            <label htmlFor="sr-vault-content" className="block text-sm font-medium text-gray-700">Content</label>
+            <label htmlFor="sr-vault-content" className="block text-sm font-medium text-gray-700">{t('vault.content')}</label>
             <button
               className={`text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200 ${importing ? 'opacity-60' : ''}`}
               disabled={importing}
               onClick={() => void handleFileImport()}
             >
-              {importing ? 'Reading file…' : 'Import PDF / DOCX / TXT'}
+              {importing ? t('vault.readingFile') : t('vault.importFile')}
             </button>
           </div>
           <textarea
             id="sr-vault-content"
             className="w-full border border-gray-400 rounded px-3 py-2 text-sm h-48"
-            placeholder="Paste or type your content here, or import a file..."
+            placeholder={t('vault.contentPlaceholder')}
             value={formContent}
             onChange={e => setFormContent(e.target.value)}
           />
         </div>
 
         <div className="mb-3">
-          <label htmlFor="sr-vault-tags" className="block text-sm font-medium text-gray-700 mb-1">Tags (comma separated)</label>
+          <label htmlFor="sr-vault-tags" className="block text-sm font-medium text-gray-700 mb-1">{t('vault.tags')}</label>
           <input
             id="sr-vault-tags"
             className="w-full border border-gray-400 rounded px-3 py-2 text-sm"
-            placeholder="e.g. engineering, leadership"
+            placeholder={t('vault.tagsPlaceholder')}
             value={formTags}
             onChange={e => setFormTags(e.target.value)}
           />
         </div>
 
         <div className="flex justify-end gap-2 mt-4">
-          <button className="px-4 py-2 text-sm rounded bg-gray-200 text-gray-700 hover:bg-gray-300" onClick={onCancel}>Cancel</button>
+          <button className="px-4 py-2 text-sm rounded bg-gray-200 text-gray-700 hover:bg-gray-300" onClick={onCancel}>{t('vault.cancel')}</button>
           <button
             className={`px-4 py-2 text-sm rounded text-white ${saving ? 'bg-blue-400' : 'bg-blue-600 hover:bg-blue-700'}`}
             disabled={saving || !formTitle.trim() || !formContent.trim()}
             onClick={handleSave}
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? t('vault.saving') : t('vault.save')}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function VaultBackupDialog({
+  mode,
+  fileName,
+  onClose,
+  onSubmit,
+}: {
+  mode: 'export' | 'import';
+  fileName?: string;
+  onClose: () => void;
+  onSubmit: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const busyRef = useRef(false);
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusable = () => Array.from(
+      dialog?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])') ?? []
+    ).filter(element => element.offsetParent !== null);
+    focusable()[0]?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busyRef.current) {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const elements = focusable();
+      if (elements.length === 0) return;
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previous?.focus();
+    };
+  }, []);
+
+  function getErrorMessage(cause: unknown): string {
+    if (cause instanceof EncryptedBackupError) {
+      return t(`vault.backupError.${cause.code}`);
+    }
+    return t('vault.backupError.unexpected', {
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setError(null);
+    if (mode === 'export' && password !== confirmation) {
+      setError(t('vault.passwordMismatch'));
+      return;
+    }
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await onSubmit(password);
+      busyRef.current = false;
+      onClose();
+    } catch (cause) {
+      busyRef.current = false;
+      setBusy(false);
+      setError(getErrorMessage(cause));
+    }
+  }
+
+  const exporting = mode === 'export';
+  const title = t(exporting ? 'vault.exportEncryptedTitle' : 'vault.importEncryptedTitle');
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div
+        ref={dialogRef}
+        className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sr-vault-backup-title"
+      >
+        <h2 id="sr-vault-backup-title" className="text-lg font-semibold mb-2">{title}</h2>
+        {fileName && <p className="mb-3 text-sm text-gray-600">{fileName}</p>}
+        <p className="mb-4 text-sm text-gray-700">
+          {t(exporting ? 'vault.exportPasswordHelp' : 'vault.importPasswordHelp')}
+        </p>
+        {exporting && <p className="mb-4 text-sm text-amber-800">{t('vault.passwordRecoveryWarning')}</p>}
+
+        {error && <div className="mb-4 rounded border border-red-400 bg-red-100 px-3 py-2 text-sm text-red-800" role="alert">{error}</div>}
+
+        <form className="space-y-3" onSubmit={event => void submit(event)}>
+          <div>
+            <label htmlFor="sr-backup-password" className="mb-1 block text-sm font-medium text-gray-700">{t('vault.password')}</label>
+            <input
+              id="sr-backup-password"
+              type="password"
+              autoComplete={exporting ? 'new-password' : 'current-password'}
+              className="w-full rounded border border-gray-400 px-3 py-2 text-sm"
+              value={password}
+              onChange={event => { setPassword(event.target.value); setError(null); }}
+            />
+          </div>
+          {exporting && (
+            <div>
+              <label htmlFor="sr-backup-confirmation" className="mb-1 block text-sm font-medium text-gray-700">{t('vault.confirmPassword')}</label>
+              <input
+                id="sr-backup-confirmation"
+                type="password"
+                autoComplete="new-password"
+                className="w-full rounded border border-gray-400 px-3 py-2 text-sm"
+                value={confirmation}
+                onChange={event => { setConfirmation(event.target.value); setError(null); }}
+              />
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              className="rounded bg-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-300"
+              disabled={busy}
+              onClick={onClose}
+            >
+              {t('vault.close')}
+            </button>
+            <button
+              type="submit"
+              className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+              disabled={busy || !password || (exporting && !confirmation)}
+            >
+              {busy ? t(exporting ? 'vault.encrypting' : 'vault.decrypting') : title}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -212,11 +376,11 @@ function ItemCard({ item, onEdit, onDelete }: { item: VaultItem; onEdit: () => v
     <div className="border border-gray-200 rounded-lg p-4 mb-2 bg-white shadow-sm">
       <div className="flex items-center justify-between mb-2">
         <span className="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded">
-          {TYPE_LABELS[item.type] ?? item.type}
+          {TYPE_LABEL_KEYS[item.type] ? t(TYPE_LABEL_KEYS[item.type]) : item.type}
         </span>
         <div className="flex gap-1">
-          <button className="text-xs px-2.5 py-1.5 rounded bg-gray-100 text-gray-800 hover:bg-gray-200" onClick={onEdit}>Edit</button>
-          <button className="text-xs px-2.5 py-1.5 rounded bg-red-100 text-red-800 hover:bg-red-200" onClick={onDelete}>Delete</button>
+          <button className="text-xs px-2.5 py-1.5 rounded bg-gray-100 text-gray-800 hover:bg-gray-200" onClick={onEdit}>{t('vault.edit')}</button>
+          <button className="text-xs px-2.5 py-1.5 rounded bg-red-100 text-red-800 hover:bg-red-200" onClick={onDelete}>{t('vault.delete')}</button>
         </div>
       </div>
       <h3 className="font-medium text-sm">{item.title}</h3>
@@ -226,12 +390,13 @@ function ItemCard({ item, onEdit, onDelete }: { item: VaultItem; onEdit: () => v
         </div>
       )}
       <p className="text-gray-700 text-xs mt-1 whitespace-pre-wrap">{preview}{hasMore ? '...' : ''}</p>
-      <p className="text-gray-600 text-xs mt-1">Updated: {new Date(item.updatedAt).toLocaleDateString()}</p>
+      <p className="text-gray-600 text-xs mt-1">{t('vault.updated', { date: new Date(item.updatedAt).toLocaleDateString(getUiLocale()) })}</p>
     </div>
   );
 }
 
 export function VaultManager() {
+  useSyncExternalStore(subscribeLocale, getUiLocale, getUiLocale);
   const [items, setItems] = useState<VaultItem[]>([]);
   const [profiles, setProfiles] = useState<VaultProfile[]>([defaultVaultProfile()]);
   const [activeProfileId, setActiveProfileIdState] = useState('default');
@@ -245,6 +410,7 @@ export function VaultManager() {
   const [profileEditor, setProfileEditor] = useState<{ mode: 'create' | 'rename'; value: string } | null>(null);
   const [confirmDeleteProfile, setConfirmDeleteProfile] = useState(false);
   const [deletedItem, setDeletedItem] = useState<VaultItem | null>(null);
+  const [backupDialog, setBackupDialog] = useState<BackupDialogState | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -267,7 +433,7 @@ export function VaultManager() {
       const all = await getAllItems(profileId);
       setItems(all);
     } catch (e) {
-      setError((e as Error).message);
+      setError(t('vault.loadError', { error: (e as Error).message }));
     } finally {
       setLoading(false);
     }
@@ -299,7 +465,7 @@ export function VaultManager() {
   async function submitProfileEditor() {
     const name = profileEditor?.value.trim();
     if (!profileEditor || !name) {
-      setNotice({ kind: 'error', message: 'Enter a profile name.' });
+      setNotice({ kind: 'error', message: t('vault.enterProfileName') });
       return;
     }
     try {
@@ -307,15 +473,15 @@ export function VaultManager() {
         const profile = await addVaultProfile(name);
         await refreshProfiles();
         await handleProfileChange(profile.id);
-        setNotice({ kind: 'success', message: `Created profile “${name}”.` });
+        setNotice({ kind: 'success', message: t('vault.createdProfile', { name }) });
       } else {
         await renameVaultProfile(activeProfileId, name);
         await refreshProfiles();
         setProfileEditor(null);
-        setNotice({ kind: 'success', message: `Renamed profile to “${name}”.` });
+        setNotice({ kind: 'success', message: t('vault.renamedProfile', { name }) });
       }
     } catch (e) {
-      setNotice({ kind: 'error', message: `Could not save profile: ${(e as Error).message}` });
+      setNotice({ kind: 'error', message: t('vault.saveProfileError', { error: (e as Error).message }) });
     }
   }
 
@@ -325,9 +491,9 @@ export function VaultManager() {
       await deleteVaultProfile(activeProfileId);
       const active = await refreshProfiles();
       await handleProfileChange(active);
-      setNotice({ kind: 'success', message: 'Profile deleted. Its items were kept but are hidden until that profile id is restored.' });
+      setNotice({ kind: 'success', message: t('vault.profileDeleted') });
     } catch (e) {
-      setNotice({ kind: 'error', message: `Could not delete profile: ${(e as Error).message}` });
+      setNotice({ kind: 'error', message: t('vault.deleteProfileError', { error: (e as Error).message }) });
     } finally {
       setConfirmDeleteProfile(false);
     }
@@ -375,7 +541,7 @@ export function VaultManager() {
       setNotice(null);
       await loadItems();
     } catch (e) {
-      setNotice({ kind: 'error', message: `Could not delete item: ${(e as Error).message}` });
+      setNotice({ kind: 'error', message: t('vault.deleteItemError', { error: (e as Error).message }) });
     }
   }
 
@@ -385,9 +551,9 @@ export function VaultManager() {
       await updateItem(deletedItem);
       setDeletedItem(null);
       await loadItems();
-      setNotice({ kind: 'success', message: 'Item restored.' });
+      setNotice({ kind: 'success', message: t('vault.itemRestored') });
     } catch (e) {
-      setNotice({ kind: 'error', message: `Could not restore item: ${(e as Error).message}` });
+      setNotice({ kind: 'error', message: t('vault.restoreItemError', { error: (e as Error).message }) });
     }
   }
 
@@ -403,8 +569,27 @@ export function VaultManager() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setNotice({ kind: 'error', message: `Export failed: ${(e as Error).message}` });
+      setNotice({ kind: 'error', message: t('vault.exportError', { error: (e as Error).message }) });
     }
+  }
+
+  async function handleEncryptedExport(password: string): Promise<void> {
+    const backup = await encryptVaultBackup(await exportVault(activeProfileId), password);
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pageside-vault-encrypted-${new Date().toISOString().substring(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setNotice({ kind: 'success', message: t('vault.encryptedExportSuccess') });
+  }
+
+  async function handleEncryptedImport(backup: EncryptedVaultBackup, password: string): Promise<void> {
+    const data = await decryptVaultBackup(backup, password);
+    const count = await importVault(data, activeProfileId);
+    setNotice({ kind: 'success', message: t('vault.importedItems', { count }) });
+    await loadItems();
   }
 
   async function handleImport() {
@@ -415,17 +600,38 @@ export function VaultManager() {
       const file = input.files?.[0];
       if (!file) return;
       try {
+        if (file.size > MAX_BACKUP_FILE_BYTES) {
+          throw new EncryptedBackupError('payload_too_large');
+        }
         const text = await file.text();
-        const data = JSON.parse(text);
-        if (!data.version || !Array.isArray(data.items)) {
-          setNotice({ kind: 'error', message: 'Invalid vault file format.' });
+        const data: unknown = JSON.parse(text);
+        if (
+          data &&
+          typeof data === 'object' &&
+          'format' in data &&
+          data.format === 'pageside-encrypted-vault'
+        ) {
+          if (!isEncryptedVaultBackup(data)) {
+            setNotice({ kind: 'error', message: t('vault.backupError.invalid_format') });
+            return;
+          }
+          setBackupDialog({ mode: 'import', backup: data, fileName: file.name });
+          return;
+        }
+        if (!isVaultExport(data)) {
+          setNotice({ kind: 'error', message: t('vault.invalidFile') });
           return;
         }
         const count = await importVault(data, activeProfileId);
-        setNotice({ kind: 'success', message: `Imported ${count} items into the active profile.` });
+        setNotice({ kind: 'success', message: t('vault.importedItems', { count }) });
         await loadItems();
       } catch (e) {
-        setNotice({ kind: 'error', message: `Import failed: ${(e as Error).message}` });
+        setNotice({
+          kind: 'error',
+          message: e instanceof EncryptedBackupError
+            ? t(`vault.backupError.${e.code}`)
+            : t('vault.importError', { error: (e as Error).message }),
+        });
       }
     };
     input.click();
@@ -434,37 +640,37 @@ export function VaultManager() {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 mb-3 bg-white border border-gray-200 rounded-lg px-3 py-2">
-        <label className="text-xs font-medium text-gray-700">Vault profile</label>
+        <label className="text-xs font-medium text-gray-700">{t('vault.profile')}</label>
         <select
           className="border border-gray-400 rounded px-2 py-1.5 text-sm min-w-40"
-          aria-label="Vault profile"
+          aria-label={t('vault.profile')}
           value={activeProfileId}
           onChange={e => void handleProfileChange(e.target.value)}
         >
           {profiles.map(p => (
             <option key={p.id} value={p.id}>
-              {p.name}{p.id === 'default' ? ' (default)' : ''}
+              {p.name}{p.id === 'default' ? ` ${t('vault.default')}` : ''}
             </option>
           ))}
         </select>
         <button className="px-2.5 py-1.5 text-xs rounded bg-gray-100 text-gray-800 hover:bg-gray-200" onClick={handleAddProfile}>
-          + New profile
+          {t('vault.newProfile')}
         </button>
         <button
           className="px-2.5 py-1.5 text-xs rounded bg-gray-100 text-gray-800 hover:bg-gray-200 disabled:opacity-40"
           disabled={activeProfileId === 'default'}
           onClick={handleRenameProfile}
         >
-          Rename
+          {t('vault.rename')}
         </button>
         <button
           className="px-2.5 py-1.5 text-xs rounded bg-red-50 text-red-700 border border-red-300 hover:bg-red-100 disabled:opacity-40"
           disabled={activeProfileId === 'default'}
           onClick={() => setConfirmDeleteProfile(true)}
         >
-          Delete
+          {t('vault.delete')}
         </button>
-        <span className="ml-auto text-xs text-gray-600">{items.length} items in this profile</span>
+        <span className="ml-auto text-xs text-gray-600">{t('vault.itemCount', { count: items.length })}</span>
       </div>
 
       {profileEditor && (
@@ -474,7 +680,7 @@ export function VaultManager() {
         >
           <div className="flex-1 min-w-48">
             <label htmlFor="sr-profile-name" className="block text-xs font-medium text-gray-700 mb-1">
-              {profileEditor.mode === 'create' ? 'New profile name' : 'Rename profile'}
+              {t(profileEditor.mode === 'create' ? 'vault.newProfileName' : 'vault.renameProfile')}
             </label>
             <input
               id="sr-profile-name"
@@ -486,14 +692,14 @@ export function VaultManager() {
             />
           </div>
           <button type="submit" className="px-3 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">
-            Save profile
+            {t('vault.saveProfile')}
           </button>
           <button
             type="button"
             className="px-3 py-2 text-sm rounded bg-white border border-gray-400 text-gray-800 hover:bg-gray-100"
             onClick={() => setProfileEditor(null)}
           >
-            Cancel
+            {t('vault.cancel')}
           </button>
         </form>
       )}
@@ -501,20 +707,20 @@ export function VaultManager() {
       {confirmDeleteProfile && (
         <div className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3" role="alert">
           <p className="text-sm text-red-900">
-            Delete profile “{profiles.find(p => p.id === activeProfileId)?.name ?? activeProfileId}”? Its items are kept but hidden until the profile id is restored.
+            {t('vault.deleteProfileConfirm', { name: profiles.find(p => p.id === activeProfileId)?.name ?? activeProfileId })}
           </p>
           <div className="mt-2 flex gap-2">
             <button
               className="px-3 py-2 text-sm rounded bg-red-700 text-white hover:bg-red-800"
               onClick={() => void handleDeleteProfile()}
             >
-              Delete profile
+              {t('vault.deleteProfile')}
             </button>
             <button
               className="px-3 py-2 text-sm rounded bg-white border border-gray-400 text-gray-800 hover:bg-gray-100"
               onClick={() => setConfirmDeleteProfile(false)}
             >
-              Cancel
+              {t('vault.cancel')}
             </button>
           </div>
         </div>
@@ -531,12 +737,12 @@ export function VaultManager() {
 
       {deletedItem && (
         <div className="mb-3 flex items-center gap-3 rounded border border-amber-300 bg-amber-50 px-4 py-3" role="status">
-          <p className="text-sm text-amber-900 flex-1">Deleted “{deletedItem.title}”.</p>
+          <p className="text-sm text-amber-900 flex-1">{t('vault.deletedItem', { title: deletedItem.title })}</p>
           <button className="px-3 py-2 text-sm rounded bg-white border border-amber-400 text-amber-900 hover:bg-amber-100" onClick={() => void handleUndoDelete()}>
-            Undo
+            {t('vault.undo')}
           </button>
           <button className="px-3 py-2 text-sm rounded bg-transparent text-amber-900 hover:bg-amber-100" onClick={() => setDeletedItem(null)}>
-            Dismiss
+            {t('vault.dismiss')}
           </button>
         </div>
       )}
@@ -545,48 +751,52 @@ export function VaultManager() {
         <div className="relative flex-1">
           <input
             className="w-full border border-gray-400 rounded px-3 py-2 text-sm"
-            placeholder="Search vault..."
+            placeholder={t('vault.search')}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
           />
         </div>
         <button className="px-3 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700" onClick={() => setShowAddForm(true)}>
-          + Add item
+          {t('vault.addItemAction')}
         </button>
         <button className="px-3 py-2 text-sm rounded bg-white border border-gray-400 text-gray-700 hover:bg-gray-50" onClick={handleExport}>
-          Export
+          {t('vault.export')}
+        </button>
+        <button className="px-3 py-2 text-sm rounded bg-white border border-blue-400 text-blue-700 hover:bg-blue-50" onClick={() => setBackupDialog({ mode: 'export' })}>
+          {t('vault.exportEncrypted')}
         </button>
         <button className="px-3 py-2 text-sm rounded bg-white border border-gray-400 text-gray-700 hover:bg-gray-50" onClick={handleImport}>
-          Import
+          {t('vault.import')}
         </button>
       </div>
+      <p className="mb-4 text-xs text-gray-600">{t('vault.plainExportWarning')}</p>
 
       <div className="flex gap-1 mb-4">
         <button
           className={`px-3 py-1.5 text-xs rounded ${filterType === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
           onClick={() => setFilterType('all')}
         >
-          All
+          {t('vault.all')}
         </button>
-        {ITEM_TYPES.map(t => (
+        {ITEM_TYPES.map(type => (
           <button
-            key={t}
-            className={`px-3 py-1.5 text-xs rounded ${filterType === t ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
-            onClick={() => setFilterType(t)}
+            key={type}
+            className={`px-3 py-1.5 text-xs rounded ${filterType === type ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+            onClick={() => setFilterType(type)}
           >
-            {TYPE_LABELS[t]}
+            {TYPE_LABEL_KEYS[type] ? t(TYPE_LABEL_KEYS[type]) : type}
           </button>
         ))}
       </div>
 
-      {loading && <div className="text-center text-gray-600 py-8">Loading vault...</div>}
+      {loading && <div className="text-center text-gray-600 py-8">{t('vault.loading')}</div>}
 
       {error && <div className="bg-red-100 border border-red-400 text-red-800 px-4 py-3 rounded mb-4" role="alert">{error}</div>}
 
       {!loading && !error && filteredItems().length === 0 && (
         <div className="text-center text-gray-600 py-8">
-          <p className="text-lg mb-2">No vault items yet</p>
-          <p className="text-sm">Click "+ Add item" to add your resume, portfolio, notes, or tone samples.</p>
+          <p className="text-lg mb-2">{t('vault.noItems')}</p>
+          <p className="text-sm">{t('vault.emptyHelp')}</p>
         </div>
       )}
 
@@ -609,6 +819,16 @@ export function VaultManager() {
 
       {editingItem && (
         <VaultForm item={editingItem} onSave={handleSave} onCancel={() => setEditingItem(null)} />
+      )}
+      {backupDialog && (
+        <VaultBackupDialog
+          mode={backupDialog.mode}
+          fileName={backupDialog.mode === 'import' ? backupDialog.fileName : undefined}
+          onClose={() => setBackupDialog(null)}
+          onSubmit={password => backupDialog.mode === 'export'
+            ? handleEncryptedExport(password)
+            : handleEncryptedImport(backupDialog.backup, password)}
+        />
       )}
     </div>
   );

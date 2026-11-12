@@ -17,6 +17,26 @@ export interface VaultExport {
   exportedAt: number;
 }
 
+export function isVaultExport(value: unknown): value is VaultExport {
+  if (!value || typeof value !== 'object') return false;
+  const data = value as Partial<VaultExport>;
+  if (data.version !== 1 || !Number.isFinite(data.exportedAt) || !Array.isArray(data.items)) return false;
+  return data.items.every(item => {
+    if (!item || typeof item !== 'object') return false;
+    const candidate = item as Partial<VaultItem>;
+    return (
+      ['resume', 'portfolio', 'note', 'tone_sample'].includes(candidate.type ?? '') &&
+      typeof candidate.title === 'string' &&
+      typeof candidate.content === 'string' &&
+      Array.isArray(candidate.tags) &&
+      candidate.tags.every(tag => typeof tag === 'string') &&
+      Number.isFinite(candidate.createdAt) &&
+      Number.isFinite(candidate.updatedAt) &&
+      (candidate.vaultProfileId === undefined || typeof candidate.vaultProfileId === 'string')
+    );
+  });
+}
+
 const DB_NAME = 'screen-reader-vault';
 const STORE_NAME = 'items';
 const DB_VERSION = 1;
@@ -107,6 +127,9 @@ export async function exportVault(profileId?: string): Promise<VaultExport> {
 }
 
 export async function importVault(data: VaultExport, profileId?: string): Promise<number> {
+  if (!isVaultExport(data)) {
+    throw new Error('Invalid vault export data.');
+  }
   const db = await getDb();
   let count = 0;
   for (const item of data.items) {
@@ -123,8 +146,5 @@ export async function importVault(data: VaultExport, profileId?: string): Promis
 
 export async function clearVault(): Promise<void> {
   const db = await getDb();
-  const items = await db.getAll(STORE_NAME);
-  for (const item of items) {
-    await db.delete(STORE_NAME, item.id);
-  }
+  await db.clear(STORE_NAME);
 }
