@@ -3,7 +3,7 @@ import type { AnswerSource, GenerationUsage, StreamEvent, StreamRequest } from '
 import type { PageContext } from '../lib/fieldDetector';
 import type { VaultItem } from '../lib/vault';
 import type { RetrievalMode } from '../lib/retrieval';
-import { selectRelevantVaultItems } from '../lib/promptBuilder';
+import { extractSourceExcerpt, selectRelevantVaultItems } from '../lib/promptBuilder';
 import { buildChatSystemPrompt, buildChatUserPrompt } from '../lib/chatPrompt';
 import {
   clampContextBudget,
@@ -13,6 +13,7 @@ import {
   outputBudgetFor,
 } from '../lib/usage';
 import { t } from '../lib/i18n';
+import { getPageRecovery, pageRecoveryStorageKey, savePageChat } from '../lib/recovery';
 
 interface ChatMessage {
   id: string;
@@ -89,13 +90,18 @@ export function Chat({
   pageContext,
   onUsage,
   active = true,
+  pageUrl = '',
+  recoveryEnabled = false,
 }: {
   vaultProfileId?: string;
   pageContext?: PageContext;
   onUsage?: (usage: GenerationUsage) => void;
   active?: boolean;
+  pageUrl?: string;
+  recoveryEnabled?: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesLoadedFor, setMessagesLoadedFor] = useState('');
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [tabContext, setTabContext] = useState<PageContext>(emptyContext);
@@ -109,6 +115,7 @@ export function Chat({
   const timeoutRef = useRef<number | null>(null);
   const onUsageRef = useRef(onUsage);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const currentRecoveryKey = pageUrl ? pageRecoveryStorageKey(pageUrl) : '';
 
   onUsageRef.current = onUsage;
 
@@ -234,6 +241,39 @@ export function Chat({
   }, [refreshTabContext]);
 
   useEffect(() => {
+    let cancelled = false;
+    setMessages([]);
+    setMessagesLoadedFor('');
+    if (!recoveryEnabled || !pageUrl) {
+      setMessagesLoadedFor(currentRecoveryKey);
+      return () => { cancelled = true; };
+    }
+
+    void getPageRecovery(pageUrl).then(recovery => {
+      if (cancelled) return;
+      setMessages((recovery?.chat ?? []).map(message => ({ ...message, pending: false })));
+      setMessagesLoadedFor(currentRecoveryKey);
+    }).catch(error => {
+      if (cancelled) return;
+      console.warn('[Pageside] Could not restore chat session:', error);
+      setNotice('Could not restore this chat. Check extension storage and try again.');
+      setMessagesLoadedFor(currentRecoveryKey);
+    });
+    return () => { cancelled = true; };
+  }, [currentRecoveryKey, pageUrl, recoveryEnabled]);
+
+  useEffect(() => {
+    if (!recoveryEnabled || !pageUrl || messagesLoadedFor !== currentRecoveryKey) return;
+    const timer = window.setTimeout(() => {
+      void savePageChat(pageUrl, messages).catch(error => {
+        console.warn('[Pageside] Could not save chat session:', error);
+        setNotice('Could not save this chat. Check available extension storage.');
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [currentRecoveryKey, messages, messagesLoadedFor, pageUrl, recoveryEnabled]);
+
+  useEffect(() => {
     setVaultLoaded(false);
     setVaultItems([]);
     void refreshVault();
@@ -352,6 +392,7 @@ export function Chat({
       id: item.id!,
       title: item.title,
       type: item.type,
+      excerpt: extractSourceExcerpt(question, item.content),
     }));
 
     const port = getPort();
@@ -544,9 +585,26 @@ function ChatBubble({ message }: { message: ChatMessage }) {
           </p>
         )}
         {message.sources.length > 0 && (
-          <p className={`mt-1.5 text-xs truncate ${isUser ? 'text-blue-100' : 'text-gray-600'}`} title={message.sources.map(source => source.title).join(', ')}>
-            {t('chat.sources')}: {message.sources.map(source => source.title).join(', ')}
-          </p>
+          <>
+            <p className={`mt-1.5 text-xs truncate ${isUser ? 'text-blue-100' : 'text-gray-600'}`} title={message.sources.map(source => source.title).join(', ')}>
+              {t('chat.sources')}: {message.sources.map(source => source.title).join(', ')}
+            </p>
+            {!isUser && message.sources.some(source => source.excerpt) && (
+              <details className="mt-1 text-xs text-gray-700">
+                <summary className="cursor-pointer font-medium">View supporting passages</summary>
+                <div className="mt-1 space-y-2">
+                  {message.sources.filter(source => source.excerpt).map(source => (
+                    <div key={`${source.id}:${source.title}`}>
+                      <p className="font-medium">{source.title}</p>
+                      <blockquote className="mt-0.5 border-l-2 border-gray-300 pl-2 whitespace-pre-wrap">
+                        {source.excerpt}
+                      </blockquote>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </>
         )}
         {hasUsage && (
           <p className={`mt-0.5 text-xs ${isUser ? 'text-blue-100' : 'text-gray-600'}`}>

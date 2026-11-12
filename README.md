@@ -11,6 +11,7 @@ A Manifest V3 Chrome extension that reads the current page, detects form questio
 - Streams answers with tone revisions, inline editing, history reuse, and NEEDS INPUT flagging
 - Requires explicit approval before writing to the page, with batch confirmation and undo
 - Supports OpenRouter, Anthropic, OpenAI, Grok (xAI), and Groq
+- Localizes the complete options experience in English and Spanish; unsupported interface locales fall back to English
 - Keeps all vault, history, and settings data in the browser
 
 ## Tech Stack
@@ -70,8 +71,8 @@ npm run dev
 - **Question detection**: labels resolve from `label[for]`, `aria-label`/`aria-labelledby`, wrapping labels, and the visible question container used by boards such as Lever. Machine field names (`cards[...]`, UUIDs, `field0`) are never shown or sent as the question; a field whose question cannot be read shows an error instead of generating a random answer
 - **Streaming**: answers stream into the card live over a `sr_stream` runtime port
 - **Tone controls**: Shorter, Longer, Casual, and Formal revise the current draft
-- **Sources**: vault items used for each answer are listed under the card
-- **NEEDS INPUT flagging**: missing facts the model cannot source are flagged in red and stripped from the text on insert. Paragraph breaks and line formatting are preserved in drafts, cover letters, video scripts, and inserted text
+- **Sources**: vault items used for each answer are listed under the card, with expandable excerpts of the supporting passages in the page card, side panel, and chat
+- **NEEDS INPUT flagging**: missing specific facts are flagged individually in red and stripped from the text on insert. Paragraph breaks and line formatting are preserved in drafts, cover letters, video scripts, and inserted text
 - **Answer history**: accepted answers are saved to IndexedDB; similar past questions feed future generations as context, and near-identical ones are reused directly with a "From history" badge
 - **Vault-first drafts**: a vault note whose title matches the question is offered directly with a "From vault" badge, without an LLM call
 
@@ -81,7 +82,14 @@ npm run dev
 - Chat answers free-form questions with the same local vault retrieval and provider streaming as drafts
 - Replies use the current page context (company, role, job description) when site access is enabled, and fall back to the active tab's title and URL otherwise, so chat works on sites you have not enabled
 - Each reply lists the vault sources it used and shows token/cost usage; replies can be stopped and the conversation can be cleared
-- Conversation history stays in the side panel session and is not saved to IndexedDB
+- By default, chat stays in the side panel session and is not saved. Optional session recovery stores drafts and chat in local extension storage and restores them for the same page. Recovered answers are never approved automatically; drafts whose field identity, selector, or current value changed must be explicitly reviewed before insertion. Disabling recovery clears saved sessions.
+
+## Local Data & Privacy
+
+- Options → Settings shows counts for locally stored vault items, accepted-answer history, saved page sessions, and provider/answer settings.
+- Clear vault, history, saved sessions, and provider/answer settings independently. Each destructive action requires an inline confirmation; clearing settings also removes the API key. Clearing saved sessions turns recovery off.
+- Vault and history live in extension IndexedDB. Settings, API keys, and opt-in recovery live in `chrome.storage.local`. They are kept in the current browser profile, but Pageside does not encrypt local data.
+- The standard Vault JSON export remains plaintext; use **Export encrypted** for a password-protected backup. Passwords are not stored or recoverable, and imports merge items into the active vault profile.
 
 ## Review, Errors, and Accessibility
 
@@ -104,6 +112,7 @@ npm run dev
 ## Vault Profiles & Documents
 
 - **Vault profiles**: Options → Vault has a profile bar. Create profiles such as "Product roles" and "Ops roles", switch the active one, and add or import items into it. The default profile is always available and cannot be deleted.
+- **Vault backups**: Export either the existing plaintext JSON or a password-encrypted JSON backup of the active profile. Encrypted backups use PBKDF2-SHA-256 and AES-256-GCM in the browser; use a passphrase of at least 12 characters. The passphrase is never stored, and losing it makes the backup unrecoverable. Importing adds items to the active profile and does not replace existing items. Encrypted backups support up to 50 MB of vault data; backup import files are capped at 70 MB.
 - **Profile selection on the page**: the floating **PS** menu and the side panel header both include a vault-profile selector. The selection is stored per site, so one site can use Operations while another uses Customer Success. Choose **Auto** to fall back to a matching site profile's vault mapping, then to the globally active profile.
 - **Automatic mapping**: Options → Profiles can bind a site profile to a vault profile. When the site profile matches the page, that vault profile is used automatically until you override it from the toolbar or side panel.
 - **Cover letters and video scripts**: from the page toolbar menu or the side panel, generate a tailored cover letter or a short self-introduction video script from the page's job description plus the active vault. The result streams into a modal with Copy, Download `.txt`, and Save to Vault. Company, job title, and job description come from JSON-LD `JobPosting` data when available, then from job-specific DOM selectors, so job boards do not substitute the board name for the hiring company.
@@ -174,11 +183,12 @@ tests/            # Node test runner suites
 
 ```bash
 npm test        # Node test runner
+npm run quality-check # deterministic prompt/retrieval/provider regression scenarios
 npm run typecheck
 npm run build
 ```
 
-`npm test` covers retrieval, history similarity, document import, field detection, prompt building, error mapping, provider handling, and usage budgets.
+`npm test` covers retrieval, history similarity, document import, field detection, prompt building, error mapping, provider handling, usage budgets, and recovery bounds. `npm run quality-check` runs synthetic grounding, missing-fact, field-classification, output-budget, and request-shape scenarios across all configured providers. It uses no real vault data and makes no network requests.
 
 ## Testing on Real Forms
 
@@ -189,6 +199,8 @@ npm run build
 5. Click a field, or use the side panel, to generate a draft answer
 6. On Lever-style forms, confirm the side panel shows the visible question (for example "Why do you want to work at Acme?") instead of the `cards[...]` field name. `test-pages/forms.html` section 9 reproduces this layout
 7. Switch the side panel to **Chat** and ask a question; chat works with or without site access because it uses the vault plus the active tab's title/URL
+8. Enable **Save drafts and chat on this device** in the side panel, draft an answer on test page section 10, change or move the question, then rescan. The draft must be marked stale and cannot be inserted until reviewed. Remove the field and verify the draft is not restored into another field.
+9. In Options → Vault, create an encrypted backup with a test passphrase of 12+ characters. Confirm the downloaded JSON does not contain the sample vault text, then import it into a temporary profile. Verify a wrong passphrase is rejected and a correct passphrase merges the item into the active profile.
 
 For quick testing, serve the test pages over HTTP so runtime permissions behave normally:
 

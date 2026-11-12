@@ -741,7 +741,14 @@ async function streamAnswer(
 }
 
 function sanitizeSources(sources: AnswerSource[]): AnswerSource[] {
-  return (sources ?? []).filter(s => s && typeof s.id === 'number' && typeof s.title === 'string');
+  return (sources ?? [])
+    .filter(s => s && typeof s.id === 'number' && typeof s.title === 'string')
+    .map(source => ({
+      id: source.id,
+      title: source.title.slice(0, 200),
+      type: typeof source.type === 'string' ? source.type.slice(0, 50) : 'other',
+      excerpt: typeof source.excerpt === 'string' ? source.excerpt.slice(0, 500) : undefined,
+    }));
 }
 
 void restoreEnabledSites();

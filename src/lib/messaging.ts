@@ -8,6 +8,7 @@ export interface AnswerSource {
   id: number;
   title: string;
   type: string;
+  excerpt?: string;
 }
 
 export type OptionsTab = 'vault' | 'profiles' | 'history' | 'settings';
@@ -244,6 +245,10 @@ export interface PanelFieldInfo {
   approved: boolean;
   error: FieldError | null;
   usage: GenerationUsage | null;
+  recovered: boolean;
+  stale: boolean;
+  recoveryValueFingerprint: string | null;
+  sourceDetails: AnswerSource[];
 }
 
 export interface VaultProfileOption {
@@ -258,6 +263,19 @@ export type SidePanelRequest =
   | { type: 'regenerate_answer'; fieldId: string }
   | { type: 'revise_field'; fieldId: string; instruction: string }
   | { type: 'update_field_draft'; fieldId: string; draft: string }
+  | {
+      type: 'restore_field_draft';
+      fieldId: string;
+      draft: string;
+      source: AnswerProvenance | null;
+      sources: string[];
+      flags: string[];
+      usage: GenerationUsage | null;
+      stale: boolean;
+      valueFingerprint: string;
+      sourceDetails: AnswerSource[];
+    }
+  | { type: 'review_recovered_field'; fieldId: string }
   | { type: 'insert_field'; fieldId: string }
   | { type: 'set_field_approved'; fieldId: string; approved: boolean }
   | { type: 'skip_field'; fieldId: string }
@@ -273,6 +291,7 @@ export type SidePanelEvent =
       fieldId: string;
       answer: string;
       sources: string[];
+      sourceDetails: AnswerSource[];
       flags: string[];
       source: AnswerProvenance;
       usage?: GenerationUsage;
@@ -293,6 +312,19 @@ export type ContentRequest =
   | { type: 'regenerate_answer'; fieldId: string }
   | { type: 'revise_field'; fieldId: string; instruction: string }
   | { type: 'update_field_draft'; fieldId: string; draft: string }
+  | {
+      type: 'restore_field_draft';
+      fieldId: string;
+      draft: string;
+      source: AnswerProvenance | null;
+      sources: string[];
+      flags: string[];
+      usage: GenerationUsage | null;
+      stale: boolean;
+      valueFingerprint: string;
+      sourceDetails: AnswerSource[];
+    }
+  | { type: 'review_recovered_field'; fieldId: string }
   | { type: 'stop_generation' }
   | { type: 'insert_field'; fieldId: string }
   | { type: 'set_field_approved'; fieldId: string; approved: boolean }

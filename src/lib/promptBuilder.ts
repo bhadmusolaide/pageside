@@ -1,7 +1,7 @@
 import type { VaultItem } from './vault';
 import type { PageContext, DetectedField } from './fieldDetector';
-import { retrieveByTfIdf, retrieveByEmbeddings, type RetrievalMode } from './retrieval';
-import { clampContextBudget, estimateTokens } from './usage';
+import { retrieveByTfIdf, retrieveByEmbeddings, type RetrievalMode } from './retrieval.ts';
+import { clampContextBudget, estimateTokens } from './usage.ts';
 
 export function buildSystemPrompt(tone: string, maxLength: number, language: string, emphasis?: string): string {
   const langNote = language !== 'en' ? `\n- Write the answer in the language specified (language code: ${language}).` : '';
@@ -23,7 +23,7 @@ export function buildSystemPrompt(tone: string, maxLength: number, language: str
     `- Avoid rhetorical questions, rule-of-three lists, and stacked adjectives. Do not start every sentence with "I".`,
     `- Do NOT use bold, headings, bullet points, or markdown. Write plain prose.`,
     `- Do NOT invent facts. Never state a specific claim (numbers, dates, names, companies, projects) unless it appears in the provided background information.`,
-    `- Only output "NEEDS INPUT: <what is missing>" when the provided background information contains nothing that can answer the question. Never output it merely because the background does not restate the question verbatim, and never add commentary about missing information. Keep any NEEDS INPUT marker short, on its own line.`,
+    `- If the background contains no answer, output only "NEEDS INPUT: <what is missing>". If you can answer part of the question but a specific requested fact is missing, answer only the supported part and add a separate "NEEDS INPUT: <missing fact>" marker. Never invent the missing detail or flag a fact just because the background phrases it differently.`,
     `- Do NOT use placeholder text or brackets like [specific achievement], [X%], [Company Name], or similar. If exact data is unavailable, describe the type of work naturally without fabricating specifics.`,
     `- Do not repeat the question in your answer.`,
     `- Output only the answer text. No preamble like "Here is a draft".`,
@@ -158,6 +158,29 @@ export function selectRelevantVaultItems(
   return { context: parts.join('\n\n'), usedItems: used };
 }
 
+export function extractSourceExcerpt(question: string, content: string, maxChars = 420): string {
+  const paragraphs = content
+    .split(/\n{2,}|(?<=[.!?])\s+/)
+    .map(text => text.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (paragraphs.length === 0) return '';
+
+  const queryWords = new Set(
+    question.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(word => word.length > 2)
+  );
+  const ranked = paragraphs
+    .map((text, index) => ({
+      text,
+      index,
+      score: [...queryWords].reduce((score, word) => score + (text.toLowerCase().includes(word) ? 1 : 0), 0),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const excerpt = ranked[0].text;
+  if (excerpt.length <= maxChars) return excerpt;
+  const boundary = excerpt.lastIndexOf(' ', maxChars);
+  return `${excerpt.slice(0, boundary > 0 ? boundary : maxChars).trimEnd()}…`;
+}
+
 function pickChunks(content: string, queryWords: string[], budgetTokens: number): string[] {
   const chunks = splitChunks(content);
   if (chunks.length === 0) return [];
@@ -266,7 +289,7 @@ export function extractName(text: string): string | null {
   return null;
 }
 
-export { extractNeedsInputFlags, stripNeedsInputMarkers, sanitizeAnswerStyle } from './answerText';
+export { extractNeedsInputFlags, stripNeedsInputMarkers, sanitizeAnswerStyle } from './answerText.ts';
 
 export function findDirectVaultAnswer(question: string, vaultItems: VaultItem[]): VaultItem | null {
   const normalized = (s: string) =>

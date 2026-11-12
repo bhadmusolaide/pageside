@@ -9,6 +9,7 @@ import {
   sanitizeAnswerStyle,
   buildCoverLetterPrompt,
   buildVideoScriptPrompt,
+  extractSourceExcerpt,
 } from '../lib/promptBuilder';
 import { similarityScore } from '../lib/history';
 import { makeFieldError, fieldErrorFromStream } from '../lib/errors';
@@ -23,6 +24,7 @@ import {
   type VaultProfile,
 } from '../lib/vaultProfile';
 import { findValueForField } from './autoFill';
+import { fingerprintFieldValue } from '../lib/recovery';
 import {
   initToolbar, onToolbarButton, hideToolbar, destroyToolbar,
   highlightField, unhighlightField, clearHighlights,
@@ -67,6 +69,7 @@ interface DraftSnapshot {
   draft: string;
   source: AnswerProvenance | null;
   sources: string[];
+  sourceDetails: AnswerSource[];
   flags: string[];
   usage: GenerationUsage | null;
 }
@@ -370,10 +373,14 @@ function newPanelInfo(field: DetectedField): PanelFieldInfo {
     source: null,
     draft: '',
     sources: [],
+    sourceDetails: [],
     flags: [],
     approved: false,
     error: null,
     usage: null,
+    recovered: false,
+    stale: false,
+    recoveryValueFingerprint: null,
   };
 }
 
@@ -391,9 +398,15 @@ function setPanelStatus(fieldId: string, status: FieldStatus, draft: string, sou
   info.source = draft ? source : null;
   if (!draft) {
     info.sources = [];
+    info.sourceDetails = [];
     info.flags = [];
   }
   info.error = null;
+  if (status === 'drafting' || status === 'draft' || status === 'inserted') {
+    info.recovered = false;
+    info.stale = false;
+    info.recoveryValueFingerprint = null;
+  }
   if (status !== 'inserted') info.usage = null;
   if (status === 'inserted') {
     info.approved = true;
@@ -406,12 +419,14 @@ function setPanelDraftMeta(
   fieldId: string,
   source: AnswerProvenance,
   sources: string[],
-  flags: string[]
+  flags: string[],
+  sourceDetails: AnswerSource[] = []
 ): void {
   const info = panelStates.get(fieldId);
   if (!info) return;
   info.source = source;
   info.sources = sources;
+  info.sourceDetails = sourceDetails;
   info.flags = flags;
 }
 
@@ -430,6 +445,7 @@ function setPanelError(fieldId: string, error: FieldError, usage: GenerationUsag
   info.draft = '';
   info.source = null;
   info.sources = [];
+  info.sourceDetails = [];
   info.flags = [];
   info.approved = false;
   info.error = error;
@@ -444,10 +460,58 @@ function setPanelUsage(fieldId: string, usage: GenerationUsage): void {
 
 function setPanelApproved(fieldId: string, approved: boolean): void {
   const info = panelStates.get(fieldId);
-  if (!info || !REVIEWABLE_STATUSES.includes(info.status)) return;
+  if (!info || info.stale || !REVIEWABLE_STATUSES.includes(info.status)) return;
   info.approved = approved;
   if (getActiveCardFieldId() === fieldId) setCardApproved(approved);
   emitPanelUpdate();
+}
+
+function restorePanelDraft(
+  fieldId: string,
+  draft: string,
+  source: AnswerProvenance | null,
+  sources: string[],
+  flags: string[],
+  usage: GenerationUsage | null,
+  stale: boolean,
+  valueFingerprint: string,
+  sourceDetails: AnswerSource[]
+): void {
+  const info = panelStates.get(fieldId);
+  if (!info || info.draft || info.status !== 'none' || !draft.trim()) return;
+  info.status = 'draft';
+  info.draft = draft;
+  info.source = source;
+  info.sources = sources;
+  info.sourceDetails = sourceDetails;
+  info.flags = flags;
+  info.usage = usage;
+  info.approved = false;
+  info.recovered = true;
+  info.stale = stale;
+  info.recoveryValueFingerprint = valueFingerprint;
+  info.error = null;
+  emitPanelUpdate();
+}
+
+function reviewRecoveredField(fieldId: string): void {
+  const info = panelStates.get(fieldId);
+  if (!info?.recovered || !info.stale) return;
+  const el = state.fieldElements.get(fieldId);
+  if (el) {
+    info.field.currentValue = currentFieldValue(el);
+    info.recoveryValueFingerprint = fingerprintFieldValue(info.field.currentValue);
+  }
+  info.stale = false;
+  info.approved = false;
+  emitPanelUpdate();
+}
+
+function currentFieldValue(el: HTMLElement): string {
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    return el.value;
+  }
+  return el.textContent?.trim() ?? '';
 }
 
 function skipPanelField(fieldId: string): void {
@@ -457,6 +521,7 @@ function skipPanelField(fieldId: string): void {
   info.draft = '';
   info.source = null;
   info.sources = [];
+  info.sourceDetails = [];
   info.flags = [];
   info.approved = false;
   info.error = null;
@@ -476,6 +541,7 @@ function snapshotDraft(fieldId: string): void {
       draft: info.draft,
       source: info.source,
       sources: [...info.sources],
+      sourceDetails: [...info.sourceDetails],
       flags: [...info.flags],
       usage: info.usage,
     });
@@ -494,6 +560,7 @@ function restorePreviousDraft(fieldId: string): DraftSnapshot | null {
     info.draft = snapshot.draft;
     info.source = snapshot.source;
     info.sources = snapshot.sources;
+    info.sourceDetails = snapshot.sourceDetails;
     info.flags = snapshot.flags;
     info.usage = snapshot.usage;
     info.approved = false;
@@ -515,11 +582,12 @@ function emitAnswerReady(
   fieldId: string,
   answer: string,
   sources: string[],
+  sourceDetails: AnswerSource[],
   flags: string[],
   source: AnswerProvenance,
   usage?: GenerationUsage
 ): void {
-  safeSend({ type: 'answer_ready', fieldId, answer, sources, flags, source, usage });
+  safeSend({ type: 'answer_ready', fieldId, answer, sources, sourceDetails, flags, source, usage });
 }
 
 function emitAnswerError(fieldId: string, error: FieldError, usage?: GenerationUsage): void {
@@ -594,7 +662,7 @@ function stopActiveGeneration(): void {
     if (!restored) setPanelStatus(fieldId, 'cancelled', '');
     if (target.kind === 'card' && getActiveCardFieldId() === fieldId) {
       if (restored && info) {
-        updateAnswerCard(info.draft, info.sources, 'Draft', info.flags, false, info.usage ?? undefined, info.source);
+        updateAnswerCard(info.draft, info.sources, 'Draft', info.flags, false, info.usage ?? undefined, info.source, info.sourceDetails);
         setCardApproved(info.approved);
       } else {
         updateAnswerCard('', [], 'Cancelled', [], false);
@@ -646,7 +714,7 @@ function onStreamEvent(event: StreamEvent): void {
     } else {
       if (historyNote) sourceTitles.push(historyNote);
       if (target.kind === 'card') {
-        updateAnswerCard(cleanAnswer, sourceTitles, 'Draft', event.untraceableClaims, false, event.usage, 'llm');
+        updateAnswerCard(cleanAnswer, sourceTitles, 'Draft', event.untraceableClaims, false, event.usage, 'llm', event.sources);
         setCardApproved(false);
       }
       const doneFieldId = pendingFieldId;
@@ -654,10 +722,10 @@ function onStreamEvent(event: StreamEvent): void {
         previousDrafts.delete(doneFieldId);
         fieldSources.set(doneFieldId, event.sources.map(s => s.id));
         setPanelStatus(doneFieldId, 'draft', cleanAnswer, 'llm');
-        setPanelDraftMeta(doneFieldId, 'llm', sourceTitles, event.untraceableClaims);
+        setPanelDraftMeta(doneFieldId, 'llm', sourceTitles, event.untraceableClaims, event.sources);
         if (event.usage) setPanelUsage(doneFieldId, event.usage);
         lastDraft = { fieldId: doneFieldId, text: cleanAnswer };
-        emitAnswerReady(doneFieldId, cleanAnswer, sourceTitles, event.untraceableClaims, 'llm', event.usage);
+        emitAnswerReady(doneFieldId, cleanAnswer, sourceTitles, event.sources, event.untraceableClaims, 'llm', event.usage);
         emitPanelUpdate();
       }
     }
@@ -677,7 +745,7 @@ function onStreamEvent(event: StreamEvent): void {
             if (event.usage) info.usage = event.usage;
           }
           if (target.kind === 'card' && getActiveCardFieldId() === errFieldId) {
-            updateAnswerCard(restored.draft, restored.sources, 'Draft', restored.flags, false, event.usage, restored.source);
+            updateAnswerCard(restored.draft, restored.sources, 'Draft', restored.flags, false, event.usage, restored.source, restored.sourceDetails);
             setCardApproved(false);
           }
         } else {
@@ -757,7 +825,7 @@ async function generate(
       target.handle.update(`Error: ${error.message}`, false);
     } else if (target.kind === 'card' && restoreFieldId && getActiveCardFieldId() === restoreFieldId) {
       if (restored) {
-        updateAnswerCard(restored.draft, restored.sources, 'Draft', restored.flags, false, restored.usage ?? undefined, restored.source);
+        updateAnswerCard(restored.draft, restored.sources, 'Draft', restored.flags, false, restored.usage ?? undefined, restored.source, restored.sourceDetails);
       } else {
         updateAnswerCard(`Error: ${error.message}`, [], 'Error', [], false);
       }
@@ -886,7 +954,12 @@ async function buildGenerationContext(question: string, fieldId: string | null) 
 
   const systemPrompt = buildSystemPrompt(tone, maxLength, language, emphasis);
   const basePrompt = buildUserPrompt(question, context, vaultContext, undefined, historyContext || undefined);
-  const sources = usedItems.map(v => ({ id: v.id!, title: v.title, type: v.type }) as AnswerSource);
+  const sources = usedItems.map(v => ({
+    id: v.id!,
+    title: v.title,
+    type: v.type,
+    excerpt: extractSourceExcerpt(question, v.content),
+  }));
 
   return {
     context,
@@ -943,7 +1016,7 @@ async function answerField(field: DetectedField, opts: { silent?: boolean; force
     fieldContexts.set(field.id, ctx);
     lastMeta = { sources: gen.sources, flags: existing.flags };
     showAnswerCard(field, el, makeCallbacks(field, el, question, gen.sources));
-    updateAnswerCard(existing.draft, existing.sources, 'Draft', existing.flags, false, existing.usage ?? undefined, existing.source);
+    updateAnswerCard(existing.draft, existing.sources, 'Draft', existing.flags, false, existing.usage ?? undefined, existing.source, existing.sourceDetails);
     setCardApproved(existing.approved);
     return;
   }
@@ -981,7 +1054,7 @@ async function answerField(field: DetectedField, opts: { silent?: boolean; force
     setPanelStatus(field.id, 'draft', gen.strongMatch.answer, 'history');
     setPanelDraftMeta(field.id, 'history', labels, []);
     lastDraft = { fieldId: field.id, text: gen.strongMatch.answer };
-    emitAnswerReady(field.id, gen.strongMatch.answer, labels, [], 'history');
+    emitAnswerReady(field.id, gen.strongMatch.answer, labels, [], [], 'history');
     emitPanelUpdate();
     if (!opts.silent) {
       showAnswerCard(field, el, makeCallbacks(field, el, question, gen.sources));
@@ -1007,18 +1080,23 @@ async function answerField(field: DetectedField, opts: { silent?: boolean; force
 
   const direct = findDirectVaultAnswer(question, state.vaultItems);
   if (direct) {
-    const sources: AnswerSource[] = direct.id !== undefined ? [{ id: direct.id, title: direct.title, type: direct.type }] : [];
+    const sources: AnswerSource[] = direct.id !== undefined ? [{
+      id: direct.id,
+      title: direct.title,
+      type: direct.type,
+      excerpt: extractSourceExcerpt(question, direct.content),
+    }] : [];
     const labels = sources.map(s => s.title);
     fieldSources.set(field.id, sources.map(s => s.id));
     setPanelStatus(field.id, 'draft', direct.content, 'vault');
-    setPanelDraftMeta(field.id, 'vault', labels, []);
+    setPanelDraftMeta(field.id, 'vault', labels, [], sources);
     lastDraft = { fieldId: field.id, text: direct.content };
-    emitAnswerReady(field.id, direct.content, labels, [], 'vault');
+    emitAnswerReady(field.id, direct.content, labels, sources, [], 'vault');
     emitPanelUpdate();
     if (!opts.silent) {
       lastMeta = { sources, flags: [] };
       showAnswerCard(field, el, makeCallbacks(field, el, question, sources));
-      updateAnswerCard(direct.content, labels, 'Draft', [], false, undefined, 'vault');
+      updateAnswerCard(direct.content, labels, 'Draft', [], false, undefined, 'vault', sources);
       setCardApproved(false);
     }
     return;
@@ -1090,7 +1168,7 @@ function makeCallbacks(
       if (!info?.approved) return;
       const clean = stripNeedsInputMarkers(raw);
       fillField(el, clean);
-      updateAnswerCard(clean, [], 'Inserted', [], false, info.usage ?? undefined, info.source);
+      updateAnswerCard(clean, info.sources, 'Inserted', info.flags, false, info.usage ?? undefined, info.source, info.sourceDetails);
       setPanelStatus(field.id, 'inserted', clean, info.source);
       emitAnswerInserted(field.id);
       emitPanelUpdate();
@@ -1218,7 +1296,12 @@ async function readSelection(): Promise<void> {
   );
   const basePrompt = `Selected text from the page:\n\n${text}\n\n${vaultContext ? `Relevant background:\n${vaultContext}\n\n` : ''}Please analyze or respond to the selected text above.`;
   const maxOutputTokens = outputBudgetFor(profile?.maxLength ?? defaults.maxLength);
-  const sources = usedItems.map(v => ({ id: v.id!, title: v.title, type: v.type }) as AnswerSource);
+  const sources = usedItems.map(v => ({
+    id: v.id!,
+    title: v.title,
+    type: v.type,
+    excerpt: extractSourceExcerpt('Read Selection', v.content),
+  }));
   currentContext = { field, question: 'Read Selection', systemPrompt, basePrompt, sources, maxOutputTokens };
 
   showAnswerCard(field, document.body, {
@@ -1310,7 +1393,12 @@ async function generateDocument(kind: DocumentKind): Promise<void> {
     ? buildCoverLetterPrompt(pageContext, vaultContext, tone, language)
     : buildVideoScriptPrompt(pageContext, vaultContext, tone, language);
 
-  const sources = usedItems.map(v => ({ id: v.id!, title: v.title, type: v.type }) as AnswerSource);
+  const sources = usedItems.map(v => ({
+    id: v.id!,
+    title: v.title,
+    type: v.type,
+    excerpt: extractSourceExcerpt(query, v.content),
+  }));
 
   await generate(title, prompt.user, prompt.system, sources, null, {
     kind: 'doc',
@@ -1442,7 +1530,14 @@ async function insertLastDraft(): Promise<void> {
   if (!el || !text) return;
 
   const info = panelStates.get(fieldId);
-  if (info && (info.status === 'inserted' || info.status === 'drafting' || info.status === 'error' || info.status === 'skipped')) return;
+  if (info && (info.stale || info.status === 'inserted' || info.status === 'drafting' || info.status === 'error' || info.status === 'skipped')) return;
+  if (info?.recovered && info.recoveryValueFingerprint !== null &&
+      fingerprintFieldValue(currentFieldValue(el)) !== info.recoveryValueFingerprint) {
+    info.stale = true;
+    info.approved = false;
+    emitPanelUpdate();
+    return;
+  }
 
   const clean = stripNeedsInputMarkers(text);
   fillField(el, clean);
@@ -1455,9 +1550,16 @@ async function insertLastDraft(): Promise<void> {
 
 function insertPanelField(fieldId: string): boolean {
   const info = panelStates.get(fieldId);
-  if (!info || !REVIEWABLE_STATUSES.includes(info.status)) return false;
+  if (!info || info.stale || !REVIEWABLE_STATUSES.includes(info.status)) return false;
   const el = state.fieldElements.get(fieldId);
   if (!el || !info.draft) return false;
+  if (info.recovered && info.recoveryValueFingerprint !== null &&
+      fingerprintFieldValue(currentFieldValue(el)) !== info.recoveryValueFingerprint) {
+    info.stale = true;
+    info.approved = false;
+    emitPanelUpdate();
+    return false;
+  }
 
   const clean = stripNeedsInputMarkers(info.draft);
   const result = fillField(el, clean);
@@ -1474,7 +1576,7 @@ async function bulkInsert(fieldIds: string[]): Promise<string[]> {
   const inserted: string[] = [];
   for (const fieldId of fieldIds) {
     const info = panelStates.get(fieldId);
-    if (!info?.approved || !REVIEWABLE_STATUSES.includes(info.status)) continue;
+    if (!info?.approved || info.stale || !REVIEWABLE_STATUSES.includes(info.status)) continue;
     if (insertPanelField(fieldId)) inserted.push(fieldId);
   }
   emitPanelUpdate();
@@ -1559,6 +1661,22 @@ chrome.runtime.onMessage.addListener((
     case 'update_field_draft':
       setPanelDraft(msg.fieldId, msg.draft);
       if (getActiveCardFieldId() === msg.fieldId) setCardAnswerText(msg.draft);
+      return false;
+    case 'restore_field_draft':
+      restorePanelDraft(
+        msg.fieldId,
+        msg.draft,
+        msg.source,
+        msg.sources,
+        msg.flags,
+        msg.usage,
+        msg.stale,
+        msg.valueFingerprint,
+        msg.sourceDetails
+      );
+      return false;
+    case 'review_recovered_field':
+      reviewRecoveredField(msg.fieldId);
       return false;
     case 'stop_generation':
       stopActiveGeneration();
